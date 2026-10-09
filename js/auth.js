@@ -25,14 +25,34 @@ export async function initAuth() {
     cache: { cacheLocation: 'localStorage' },
   });
   await app.initialize();
-  const result = await app.handleRedirectPromise();
+  let result = null;
+  try {
+    result = await app.handleRedirectPromise();
+  } catch (e) {
+    console.warn('Rückkehr von der Anmeldung', e);
+  }
   if (result?.account) app.setActiveAccount(result.account);
   if (!app.getActiveAccount()) {
     const accounts = app.getAllAccounts();
     if (accounts.length) app.setActiveAccount(accounts[0]);
   }
+  // Anmeldung nicht mehr gespeichert, aber das Konto bekannt: still im Hintergrund wieder anmelden
+  const hint = localStorage.getItem(HINT_KEY);
+  if (!app.getActiveAccount() && hint && navigator.onLine) {
+    try {
+      const r = await app.ssoSilent({ scopes: SCOPES, loginHint: hint });
+      if (r?.account) app.setActiveAccount(r.account);
+    } catch (e) {
+      console.info('Stille Anmeldung nicht möglich', e?.errorCode ?? e);
+    }
+  }
+  const a = app.getActiveAccount();
+  if (a?.username) localStorage.setItem(HINT_KEY, a.username);
   return account();
 }
+
+/** Zuletzt verwendetes Konto (für die stille Wiederanmeldung und als Vorschlag). */
+const HINT_KEY = 'tourenbuch-login-hint';
 
 /** Angemeldetes Konto ({ name, username }) oder null. */
 export function account() {
@@ -41,10 +61,12 @@ export function account() {
 }
 
 export function signIn() {
-  return app.loginRedirect({ scopes: SCOPES, prompt: 'select_account' });
+  const hint = localStorage.getItem(HINT_KEY);
+  return app.loginRedirect(hint ? { scopes: SCOPES, loginHint: hint } : { scopes: SCOPES, prompt: 'select_account' });
 }
 
 export function signOut() {
+  localStorage.removeItem(HINT_KEY);
   return app.logoutRedirect({ account: app.getActiveAccount() });
 }
 
@@ -62,5 +84,6 @@ export async function getToken() {
 
 /** Erneut anmelden (wenn getToken AuthError gemeldet hat). */
 export function signInAgain() {
-  return app.acquireTokenRedirect({ scopes: SCOPES, account: app.getActiveAccount() });
+  const a = app.getActiveAccount();
+  return a ? app.acquireTokenRedirect({ scopes: SCOPES, account: a }) : signIn();
 }

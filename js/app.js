@@ -70,6 +70,8 @@ const state = {
 // ---------- Start ----------
 
 async function start() {
+  // Die stille Anmeldung lädt die Seite kurz unsichtbar in einem Rahmen: dort nichts starten
+  if (window.self !== window.top) return;
   applyTheme(localStorage.getItem('tourenbuch-theme') || 'system');
   state.demo = localStorage.getItem(DEMO_KEY) === '1';
   try {
@@ -78,7 +80,16 @@ async function start() {
     console.error(e);
     showToast('Anmeldung fehlgeschlagen: ' + (e.message || e));
   }
-  const meta = await store.loadMeta();
+  let meta = await store.loadMeta();
+  // Anderes Konto als zuletzt? Dann gehören die gespeicherten Touren nicht dieser Person: zuerst leeren
+  if (state.user && !state.demo) {
+    const owner = state.user.username.toLowerCase();
+    if (meta.owner && meta.owner !== owner) {
+      await store.clearAll();
+      meta = {};
+    }
+    if (meta.owner !== owner) await store.saveMeta({ owner });
+  }
   state.lastSync = meta.lastSync ?? 0;
   await book.load();
   book.subscribe(() => render());
@@ -377,7 +388,7 @@ async function signOut() {
 }
 
 // Offline-Speicher anmelden (damit die App auch ohne Internet startet)
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && window.self === window.top) {
   navigator.serviceWorker.register('sw.js').catch((e) => console.warn('Offline-Speicher nicht verfügbar', e));
 }
 
