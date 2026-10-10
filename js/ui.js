@@ -51,6 +51,7 @@ export function todayIso() {
 let toastTimer = null;
 export function showToast(text) {
   const t = document.getElementById('toast');
+  if (!t) return;
   t.textContent = text;
   t.hidden = false;
   clearTimeout(toastTimer);

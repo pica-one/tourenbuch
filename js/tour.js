@@ -1,7 +1,7 @@
 // Bildschirm einer Tour: Angaben, Details, Fotos (Raster + Betrachter), Topo, GPX – Reihenfolge wie in der App.
 
 import { icon, typeBadge, typeLabel } from './icons.js';
-import { reconcileFolder, reconcileText, removeFile } from './tourbook.js';
+import { isPhotoItem, reconcileFolder, reconcileText, removeFile } from './tourbook.js';
 import { dateRange, dayCount, esc, showToast, stars, topbar } from './ui.js';
 import { openViewer } from './viewer.js';
 
@@ -60,25 +60,15 @@ export function renderTour(root, id, ctx) {
         : '<div class="panel muted">Keine Fotos</div>'}
     </div>
     ${fileSection('Topo', 'TOPO', topos, offline)}
-    ${fileSection('GPX', 'GPX', gpx, offline)}
-    <input type="file" id="pickPHOTO" accept="image/*" multiple hidden>
-    <input type="file" id="pickTOPO" accept="image/*,application/pdf,.pdf" multiple hidden>
-    <input type="file" id="pickGPX" accept=".gpx,application/gpx+xml" multiple hidden>`;
+    ${fileSection('GPX', 'GPX', gpx, offline)}`;
 
   // Ordner im OneDrive-Web öffnen
   root.querySelector('[data-open-folder]')?.addEventListener('click', () => openItem(ctx, folder));
 
   // Hinzufügen
   root.querySelectorAll('[data-add]').forEach((b) => {
-    b.onclick = () => root.querySelector(`#pick${b.dataset.add}`).click();
+    b.onclick = () => pickFiles(b.dataset.add, t.id, ctx.uploader);
   });
-  for (const kind of ['PHOTO', 'TOPO', 'GPX']) {
-    root.querySelector(`#pick${kind}`).onchange = (e) => {
-      const files = [...e.target.files];
-      e.target.value = '';
-      if (files.length) ctx.uploader.add(t.id, files, kind === 'PHOTO' ? null : kind);
-    };
-  }
   updateUploadStatus(root, t.id, ctx.uploader);
   root.querySelector('[data-folder-sync]')?.addEventListener('click', (e) => syncFolder(ctx, t.id, e.currentTarget));
 
@@ -112,6 +102,43 @@ export function renderTour(root, id, ctx) {
 
   fillThumbs(root, ctx.drive);
   if (!offline && photos.length) loadThumbs(ctx.drive, folder, photos).then(() => fillThumbs(root, ctx.drive));
+}
+
+// ---------- Dateien auswählen ----------
+// Die Auswahlfelder liegen ausserhalb des Bildschirms, der neu gezeichnet wird: Auf dem Handy geht die Seite während
+// der Auswahl in den Hintergrund und wird beim Zurückkommen evtl. neu gezeichnet – die Auswahl darf dabei nicht verloren gehen.
+// Fotos: nicht nur "image/*", sonst öffnet Chrome auf Android die Fotoauswahl (Google Fotos), die nicht zuverlässig
+// funktioniert und keine Originalnamen liefert. Mit einem weiteren Typ kommt die normale Dateiauswahl (wie bei Topos).
+const PICKER_ACCEPT = {
+  PHOTO: 'image/*,application/octet-stream',
+  TOPO: 'image/*,application/pdf,.pdf',
+  GPX: '.gpx,application/gpx+xml',
+};
+const pickers = {};
+let pickTarget = null; // { tourId, uploader }
+
+function pickFiles(kind, tourId, uploader) {
+  let input = pickers[kind];
+  if (!input) {
+    input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.accept = PICKER_ACCEPT[kind];
+    input.hidden = true;
+    input.onchange = () => {
+      let files = [...input.files];
+      input.value = '';
+      if (!pickTarget || !files.length) return;
+      const skipped = kind === 'PHOTO' ? files.filter((f) => !isPhotoItem({ name: f.name, mimeType: f.type })) : [];
+      if (skipped.length) files = files.filter((f) => !skipped.includes(f));
+      if (files.length) pickTarget.uploader.add(pickTarget.tourId, files, kind === 'PHOTO' ? null : kind);
+      if (skipped.length) showToast('Nur Fotos werden übernommen – andere Dateien als Topo oder GPX hinzufügen.');
+    };
+    document.body.appendChild(input);
+    pickers[kind] = input;
+  }
+  pickTarget = { tourId, uploader };
+  input.click();
 }
 
 function fileSection(title, kind, files, offline) {
