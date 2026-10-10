@@ -2,6 +2,7 @@
 // Original herunterladen, teilen. Die Bilder kommen in guter Qualität (2048 px) von OneDrive.
 
 import { icon } from './icons.js';
+import { isVideoName } from './tourbook.js';
 import { esc, showToast } from './ui.js';
 
 /**
@@ -24,31 +25,58 @@ export function openViewer({ photos, start, drive, thumbs, onRemove }) {
 
   function draw() {
     const p = photos[index];
+    const video = isVideoName(p.fileName);
+    const known = thumbs.get(p.oneDriveItemId);
+    el.classList.toggle('has-video', video);
     el.innerHTML = `
       <div class="viewer-bar">
         <button class="iconbtn" data-v="close" aria-label="Schliessen">${icon('close')}</button>
-        <span class="viewer-title">${esc(p.fileName)}<small>${index + 1} / ${photos.length}</small></span>
-        ${canShare ? `<button class="iconbtn" data-v="share" aria-label="Teilen">${icon('share')}</button>` : ''}
+        <span class="viewer-title">${esc(p.fileName)}<small>${index + 1} / ${photos.length}${video ? ' · Video' : ''}</small></span>
+        ${canShare && !video ? `<button class="iconbtn" data-v="share" aria-label="Teilen">${icon('share')}</button>` : ''}
         <button class="iconbtn" data-v="download" aria-label="Original herunterladen">${icon('download')}</button>
         ${onRemove ? `<button class="iconbtn" data-v="remove" aria-label="Aus Tour entfernen">${icon('delete')}</button>` : ''}
       </div>
-      <div class="viewer-stage${zoom ? ' zoomed' : ''}"><img alt="${esc(p.fileName)}" draggable="false"></div>
-      ${photos.length > 1 ? `<button class="viewer-nav prev" data-v="prev" aria-label="Vorheriges Foto">‹</button><button class="viewer-nav next" data-v="next" aria-label="Nächstes Foto">›</button>` : ''}`;
-    const img = el.querySelector('img');
-    const known = thumbs.get(p.oneDriveItemId);
-    img.src = bigUrls.get(p.oneDriveItemId) ?? known?.large ?? known?.thumb ?? '';
-    loadBig(p).then((url) => {
-      if (url && photos[index] === p) img.src = url;
-    });
-    // Nachbarn vorausladen
-    [index - 1, index + 1].forEach((i) => photos[i] && loadBig(photos[i]));
+      <div class="viewer-stage${zoom && !video ? ' zoomed' : ''}">${
+        video
+          ? `<video controls playsinline preload="metadata" ${known?.large || known?.thumb ? `poster="${esc(known.large ?? known.thumb)}"` : ''}></video><p class="viewer-msg" hidden></p>`
+          : `<img alt="${esc(p.fileName)}" draggable="false">`
+      }</div>
+      ${photos.length > 1 ? `<button class="viewer-nav prev" data-v="prev" aria-label="Vorheriges">‹</button><button class="viewer-nav next" data-v="next" aria-label="Nächstes">›</button>` : ''}`;
     el.querySelectorAll('[data-v]').forEach((b) => (b.onclick = (e) => {
       e.stopPropagation();
       action(b.dataset.v);
     }));
     const stage = el.querySelector('.viewer-stage');
-    stage.ondblclick = toggleZoom;
-    bindSwipe(stage);
+    if (video) {
+      // Video direkt von OneDrive abspielen (die Adresse ist vorab berechtigt, es wird nur geladen, was man schaut)
+      const v = stage.querySelector('video');
+      drive
+        .downloadUrl(p.oneDriveItemId)
+        .then((url) => {
+          if (photos[index] !== p || !v.isConnected) return;
+          if (url) v.src = url;
+          else showMsg(stage, 'Video auf OneDrive nicht gefunden.');
+        })
+        .catch((e) => showMsg(stage, e.message || 'Video konnte nicht geladen werden.'));
+      v.onerror = () => showMsg(stage, 'Dieses Video kann der Browser nicht abspielen – mit ⬇ herunterladen und im Video-Player öffnen.');
+    } else {
+      const img = stage.querySelector('img');
+      img.src = bigUrls.get(p.oneDriveItemId) ?? known?.large ?? known?.thumb ?? '';
+      loadBig(p).then((url) => {
+        if (url && photos[index] === p) img.src = url;
+      });
+      stage.ondblclick = toggleZoom;
+      bindSwipe(stage); // beim Video nicht: dort wischt man auf der Zeitleiste
+    }
+    // Nachbarn vorausladen (nur Fotos)
+    [index - 1, index + 1].forEach((i) => photos[i] && !isVideoName(photos[i].fileName) && loadBig(photos[i]));
+  }
+
+  function showMsg(stage, text) {
+    const m = stage.querySelector('.viewer-msg');
+    if (!m) return;
+    m.textContent = text;
+    m.hidden = false;
   }
 
   async function loadBig(p) {
@@ -66,6 +94,7 @@ export function openViewer({ photos, start, drive, thumbs, onRemove }) {
   }
 
   function toggleZoom() {
+    if (isVideoName(photos[index].fileName)) return;
     zoom = !zoom;
     el.querySelector('.viewer-stage').classList.toggle('zoomed', zoom);
   }

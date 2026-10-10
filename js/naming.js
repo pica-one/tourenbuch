@@ -82,7 +82,19 @@ export function photoFileName(mountain, startIso, number, mimeType) {
 }
 
 function extension(mimeType) {
-  return { 'image/png': 'png', 'image/heic': 'heic', 'image/heif': 'heif', 'image/webp': 'webp', 'image/gif': 'gif' }[mimeType?.toLowerCase()] ?? 'jpg';
+  return (
+    {
+      'image/png': 'png',
+      'image/heic': 'heic',
+      'image/heif': 'heif',
+      'image/webp': 'webp',
+      'image/gif': 'gif',
+      'video/mp4': 'mp4',
+      'video/quicktime': 'mov',
+      'video/3gpp': '3gp',
+      'video/webm': 'webm',
+    }[mimeType?.toLowerCase()] ?? 'jpg'
+  );
 }
 
 function trimChars(s, chars) {

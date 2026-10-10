@@ -101,9 +101,29 @@ export function setFolder(doc, tourId, path, folderId, now) {
 }
 
 const PHOTO_EXTENSIONS = ['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp', 'gif'];
+const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', '3gp', 'webm', 'mkv', 'avi'];
+
+function extensionOf(name) {
+  const n = String(name ?? '');
+  return n.includes('.') ? n.split('.').pop().toLowerCase() : '';
+}
 
 export function isPhotoItem(item) {
-  return (item.mimeType ?? '').startsWith('image/') || PHOTO_EXTENSIONS.includes(item.name.split('.').pop().toLowerCase());
+  return (item.mimeType ?? '').startsWith('image/') || PHOTO_EXTENSIONS.includes(extensionOf(item.name));
+}
+
+/** Videos stehen in der Daten-Datei bei den Fotos; erkannt werden sie an der Endung (siehe Datenformat.md). */
+export function isVideoName(name) {
+  return VIDEO_EXTENSIONS.includes(extensionOf(name));
+}
+
+export function isVideoItem(item) {
+  return (item.mimeType ?? '').startsWith('video/') || isVideoName(item.name);
+}
+
+/** Foto oder Video (gehört in die Foto-Liste einer Tour). */
+export function isMediaItem(item) {
+  return isPhotoItem(item) || isVideoItem(item);
 }
 
 /**
@@ -122,7 +142,7 @@ export function reconcileFolder(doc, tourId, rawOnline, now) {
   const folderPath = tour.oneDriveFolder?.value?.path;
   let next = doc;
 
-  const photos = online.photos.filter(isPhotoItem);
+  const photos = online.photos.filter(isMediaItem);
   const knownPhotoIds = new Set(tour.photos.filter((p) => p.deleted == null).map((p) => p.oneDriveItemId));
   const onlinePhotoIds = new Set(photos.map((p) => p.id));
   const newPhotos = photos

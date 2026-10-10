@@ -1,8 +1,8 @@
 // Bildschirm einer Tour: Angaben, Details, Fotos (Raster + Betrachter), Topo, GPX – Reihenfolge wie in der App.
 
 import { icon, typeBadge, typeLabel } from './icons.js';
-import { isPhotoItem, reconcileFolder, reconcileText, removeFile } from './tourbook.js';
-import { dateRange, dayCount, esc, showToast, stars, topbar } from './ui.js';
+import { isMediaItem, isVideoName, reconcileFolder, reconcileText, removeFile } from './tourbook.js';
+import { dateRange, dayCount, esc, mediaCount, showToast, stars, topbar } from './ui.js';
 import { openViewer } from './viewer.js';
 
 /** Vorschaubilder: itemId -> { thumb, large } (für diese Sitzung; OneDrive-Adressen laufen nach einiger Zeit ab) */
@@ -25,6 +25,7 @@ export function renderTour(root, id, ctx) {
   const partners = t.partners?.value ?? [];
   const folder = t.oneDriveFolder?.value;
   const photos = t.photos.filter((p) => p.deleted == null);
+  const videoCount = photos.filter((p) => isVideoName(p.fileName)).length;
   const topos = t.attachments.filter((a) => a.deleted == null && a.kind === 'TOPO');
   const gpx = t.attachments.filter((a) => a.deleted == null && a.kind === 'GPX');
   const offline = ctx.demo;
@@ -51,12 +52,17 @@ export function renderTour(root, id, ctx) {
     ${t.details?.value ? `<div class="section"><h2>Details</h2><div class="panel notes">${esc(t.details.value)}</div></div>` : ''}
 
     <div class="section">
-      <div class="sectionhead"><h2>Fotos${photos.length ? ` <span class="muted">(${photos.length})</span>` : ''}</h2>
-        <button class="btn outline small" data-add="PHOTO" ${offline ? 'disabled' : ''}>${icon('add', 18)} Fotos</button></div>
+      <div class="sectionhead"><h2>${videoCount ? 'Fotos und Videos' : 'Fotos'}${photos.length ? ` <span class="muted">(${mediaCount(photos.length - videoCount, videoCount)})</span>` : ''}</h2>
+        <button class="btn outline small" data-add="PHOTO" ${offline ? 'disabled' : ''}>${icon('add', 18)} Fotos/Videos</button></div>
       ${folder?.path && !offline ? `<button class="btn outline wide folderSync" data-folder-sync>${icon('sync', 18)} Mit OneDrive abgleichen</button>` : ''}
       <div id="uploadstatus"></div>
       ${photos.length
-        ? `<div class="grid">${photos.map((p, i) => `<button class="cell" data-photo="${i}" aria-label="${esc(p.fileName)}"><img data-item="${esc(p.oneDriveItemId)}" alt="" loading="lazy"></button>`).join('')}</div>`
+        ? `<div class="grid">${photos
+            .map((p, i) => {
+              const video = isVideoName(p.fileName);
+              return `<button class="cell${video ? ' video' : ''}" data-photo="${i}" aria-label="${esc(p.fileName)}${video ? ' (Video)' : ''}"><img data-item="${esc(p.oneDriveItemId)}" alt="" loading="lazy">${video ? '<span class="play" aria-hidden="true">▶</span>' : ''}</button>`;
+            })
+            .join('')}</div>`
         : '<div class="panel muted">Keine Fotos</div>'}
     </div>
     ${fileSection('Topo', 'TOPO', topos, offline)}
@@ -110,7 +116,7 @@ export function renderTour(root, id, ctx) {
 // Fotos: nicht nur "image/*", sonst öffnet Chrome auf Android die Fotoauswahl (Google Fotos), die nicht zuverlässig
 // funktioniert und keine Originalnamen liefert. Mit einem weiteren Typ kommt die normale Dateiauswahl (wie bei Topos).
 const PICKER_ACCEPT = {
-  PHOTO: 'image/*,application/octet-stream',
+  PHOTO: 'image/*,video/*,application/octet-stream',
   TOPO: 'image/*,application/pdf,.pdf',
   GPX: '.gpx,application/gpx+xml',
 };
@@ -129,10 +135,10 @@ function pickFiles(kind, tourId, uploader) {
       let files = [...input.files];
       input.value = '';
       if (!pickTarget || !files.length) return;
-      const skipped = kind === 'PHOTO' ? files.filter((f) => !isPhotoItem({ name: f.name, mimeType: f.type })) : [];
+      const skipped = kind === 'PHOTO' ? files.filter((f) => !isMediaItem({ name: f.name, mimeType: f.type })) : [];
       if (skipped.length) files = files.filter((f) => !skipped.includes(f));
       if (files.length) pickTarget.uploader.add(pickTarget.tourId, files, kind === 'PHOTO' ? null : kind);
-      if (skipped.length) showToast('Nur Fotos werden übernommen – andere Dateien als Topo oder GPX hinzufügen.');
+      if (skipped.length) showToast('Nur Fotos und Videos werden übernommen – andere Dateien als Topo oder GPX hinzufügen.');
     };
     document.body.appendChild(input);
     pickers[kind] = input;

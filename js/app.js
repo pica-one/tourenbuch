@@ -8,8 +8,8 @@ import { AuthError, BusyError, createOneDrive } from './onedrive.js';
 import * as store from './store.js';
 import { createSync } from './sync.js';
 import { renderTour as renderTourScreen, updateUploadStatus } from './tour.js';
-import { allPartnerNames, createTourBook, deleteTour, favorites, setFavorite, visibleTours } from './tourbook.js';
-import { dateRange, dateTime, esc, photoCount, showToast, stars, topbar } from './ui.js';
+import { allPartnerNames, createTourBook, deleteTour, favorites, isVideoName, setFavorite, visibleTours } from './tourbook.js';
+import { dateRange, dateTime, esc, mediaCount, showToast, stars, topbar } from './ui.js';
 import { createUploader } from './upload.js';
 
 const APP_VERSION = 'Web 0.1';
@@ -264,7 +264,8 @@ function searchText(t) {
 function card(t) {
   const label = typeLabel(t.tourType.value, t.customType?.value);
   const atts = t.attachments.filter((a) => a.deleted == null);
-  const photos = t.photos.filter((p) => p.deleted == null).length;
+  const media = t.photos.filter((p) => p.deleted == null);
+  const videos = media.filter((p) => isVideoName(p.fileName)).length;
   const partners = t.partners?.value ?? [];
   return `<a class="card" href="#/tour/${encodeURIComponent(t.id)}">
     ${typeBadge(t.tourType.value, 40, esc(label))}
@@ -275,7 +276,7 @@ function card(t) {
       <div class="mountain">${esc(t.mountain.value)}</div>
       ${t.routeName?.value ? `<div class="route">${esc(t.routeName.value)}</div>` : ''}
       ${partners.length ? `<div class="partners">mit ${esc(partners.join(', '))}</div>` : ''}
-      <div class="foot"><span class="type">${esc(label)}</span><span class="stars">${stars(t.rating?.value ?? 0)}</span><span>${photoCount(photos)}</span></div>
+      <div class="foot"><span class="type">${esc(label)}</span><span class="stars">${stars(t.rating?.value ?? 0)}</span><span>${mediaCount(media.length - videos, videos)}</span></div>
     </div>
   </a>`;
 }

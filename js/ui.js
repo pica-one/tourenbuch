@@ -38,6 +38,13 @@ export function photoCount(n) {
   return n === 1 ? '1 Foto' : `${n} Fotos`;
 }
 
+/** "44 Fotos · 2 Videos" (Videos nur, wenn es welche hat) */
+export function mediaCount(photos, videos) {
+  const v = videos === 1 ? '1 Video' : `${videos} Videos`;
+  if (!videos) return photoCount(photos);
+  return photos ? `${photoCount(photos)} · ${v}` : v;
+}
+
 export function dateTime(ms) {
   return new Date(ms).toLocaleString('de-CH', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
