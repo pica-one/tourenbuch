@@ -73,15 +73,26 @@ export function mergeFiles(local, remote) {
   }
   // Gleiches OneDrive-Element unter verschiedenen Kennungen (z. B. zwei Geräte haben denselben Ordner abgeglichen)
   for (const same of byItem.values()) {
-    const keep = [...same].sort((a, b) => addedKey(a) - addedKey(b) || cmp(a.id, b.id))[0];
     const deleted = same.map((f) => f.deleted).filter((d) => d != null);
-    result.push({ ...keep, deleted: deleted.length ? Math.min(...deleted) : null });
+    const live = same.filter((f) => f.deleted == null);
+    // Nach dem Entfernen wieder hinzugefügt (z. B. "Mit OneDrive abgleichen")? Dann ist es wieder da.
+    const readded = live.length > 0 && deleted.length > 0 && Math.max(...live.map((f) => f.added)) > Math.max(...deleted);
+    if (readded || !deleted.length) {
+      result.push(oldest(live));
+    } else {
+      result.push({ ...oldest(same), deleted: Math.min(...deleted) });
+    }
   }
   return result.sort((a, b) => a.added - b.added || cmp(a.fileName, b.fileName) || cmp(a.id, b.id));
 }
 
 function addedKey(f) {
   return f.added > 0 ? f.added : Number.MAX_SAFE_INTEGER;
+}
+
+/** Ältester Eintrag (die ältere Kennung bleibt). */
+function oldest(list) {
+  return [...list].sort((a, b) => addedKey(a) - addedKey(b) || cmp(a.id, b.id))[0];
 }
 
 /** Dasselbe Foto auf beiden Seiten: Angaben ergänzen, gelöscht bleibt gelöscht. */
