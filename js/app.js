@@ -7,6 +7,7 @@ import { icon, typeBadge, typeLabel, TYPE_NAMES } from './icons.js';
 import { AuthError, BusyError, createOneDrive } from './onedrive.js';
 import * as store from './store.js';
 import { createSync } from './sync.js';
+import { renderStats } from './stats.js';
 import { renderTour as renderTourScreen, updateUploadStatus } from './tour.js';
 import { allPartnerNames, createTourBook, deleteTour, favorites, isVideoName, setFavorite, visibleTours } from './tourbook.js';
 import { dateRange, dateTime, esc, mediaCount, showToast, stars, topbar } from './ui.js';
@@ -173,8 +174,14 @@ function renderScreen(route) {
     });
   }
   if (screen === 'settings') return renderSettings();
+  if (screen === 'stats') {
+    renderStats(root, book, statsState);
+    return bindActions();
+  }
   return renderList();
 }
+
+const statsState = { year: null };
 
 let editOpenFor = null;
 
@@ -214,7 +221,7 @@ function renderList() {
   const usedTypes = TOUR_TYPES.filter((t) => tours.some((x) => x.tourType.value === t));
   root.innerHTML = `
     ${topbar('Meine Touren', {
-      actions: `<span>${syncButton()}<button class="iconbtn" data-action="settings" aria-label="Einstellungen">${icon('settings')}</button></span>`,
+      actions: `<span>${syncButton()}<a class="iconbtn" href="#/stats" aria-label="Statistik">${icon('chart')}</a><button class="iconbtn" data-action="settings" aria-label="Einstellungen">${icon('settings')}</button></span>`,
     })}
     ${statusLine()}
     <div id="uploadbanner"></div>
