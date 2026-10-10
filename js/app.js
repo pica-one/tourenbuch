@@ -9,7 +9,8 @@ import * as store from './store.js';
 import { createSync } from './sync.js';
 import { renderStats } from './stats.js';
 import { renderTour as renderTourScreen, updateUploadStatus } from './tour.js';
-import { allPartnerNames, createTourBook, deleteTour, favorites, isVideoName, setFavorite, visibleTours } from './tourbook.js';
+import { cleanRoot, storageSettings } from './naming.js';
+import { allPartnerNames, createTourBook, deleteTour, favorites, isVideoName, setFavorite, setSetting, visibleTours } from './tourbook.js';
 import { dateRange, dateTime, esc, mediaCount, showToast, stars, topbar } from './ui.js';
 import { createUploader } from './upload.js';
 
@@ -299,8 +300,8 @@ function renderTour(id) {
 
 function renderSettings() {
   const doc = book.current();
-  const rootFolder = doc.settings.oneDriveRoot?.value ?? 'Pictures/Klettern_Bergsteigen';
-  const groups = doc.settings.groupFolders?.value ?? true;
+  const storage = storageSettings(doc);
+  const rootDraft = state.rootDraft ?? storage.root;
   const theme = localStorage.getItem('tourenbuch-theme') || 'system';
   root.innerHTML = `
     ${topbar('Einstellungen', { back: true })}
@@ -320,8 +321,13 @@ function renderSettings() {
       ${partnerRows(doc)}
     </div></div>
     <div class="section"><h2>Fotos auf OneDrive</h2><div class="panel">
-      <div class="setting"><div class="label">Ablageordner<small>${esc(rootFolder)}</small></div></div>
-      <div class="setting"><div class="label">Sammelordner verwenden<small>${groups ? 'Ja' : 'Nein'} (Klettergarten, Klettersteige, Bike)</small></div></div>
+      <div class="field rootfield"><label for="rootInput">Ablageordner (in „Meine Dateien“)</label>
+        <span class="addpartner"><input id="rootInput" value="${esc(rootDraft)}" autocomplete="off" spellcheck="false">
+          <button class="btn" id="saveRoot" ${rootDraft === storage.root ? 'disabled' : ''}>Speichern</button></span></div>
+      <div class="setting"><div class="label"><small>Neue Touren bekommen hier ihren Ordner, z. B.
+        <b>${esc(storage.root)}/Titlis/20260927_Normalweg</b>. Bestehende Tour-Ordner bleiben, wo sie sind.</small></div></div>
+      <label class="setting switchrow"><div class="label">Sammelordner verwenden<small>Klettergarten, Klettersteige und Bike je in einem eigenen Ordner</small></div>
+        <input type="checkbox" id="groupToggle" ${storage.groupFolders ? 'checked' : ''}></label>
     </div></div>
     <div class="section"><h2>Darstellung</h2><div class="panel">
       <div class="setting"><div class="label">Farbschema</div>
@@ -342,6 +348,33 @@ function renderSettings() {
       syncNow();
     };
   });
+  // Ablageordner: Eingabe merken (der Bildschirm wird beim Abgleich neu gezeichnet)
+  const rootInput = root.querySelector('#rootInput');
+  rootInput.oninput = () => {
+    state.rootDraft = rootInput.value;
+    root.querySelector('#saveRoot').disabled = cleanRoot(rootInput.value) === storage.root;
+  };
+  root.querySelector('#saveRoot').onclick = async () => {
+    const value = cleanRoot(rootInput.value);
+    if (value === storage.root) return;
+    if (!confirm(`Neue Touren kommen künftig in „${value}“. Bestehende Tour-Ordner bleiben, wo sie sind. Übernehmen?`)) return;
+    state.rootDraft = null;
+    await book.update((d) => {
+      const next = setSetting(d, 'oneDriveRoot', value, Date.now());
+      // Sammelordner mit eintragen, damit beides zusammen fest steht
+      return next.settings.groupFolders ? next : setSetting(next, 'groupFolders', storage.groupFolders, Date.now());
+    });
+    showToast('Ablageordner gespeichert');
+    syncNow();
+  };
+  root.querySelector('#groupToggle').onchange = async (e) => {
+    const on = e.target.checked;
+    await book.update((d) => {
+      const next = setSetting(d, 'groupFolders', on, Date.now());
+      return next.settings.oneDriveRoot ? next : setSetting(next, 'oneDriveRoot', storage.root, Date.now());
+    });
+    syncNow();
+  };
   root.querySelector('#theme').onchange = (e) => {
     localStorage.setItem('tourenbuch-theme', e.target.value);
     applyTheme(e.target.value);

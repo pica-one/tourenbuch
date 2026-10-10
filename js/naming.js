@@ -3,7 +3,21 @@
 //   Klettergarten, Klettersteig und Bike zusätzlich in einem Sammelordner (einstellbar).
 // Mehrtägige Touren verwenden das Startdatum. Leerzeichen werden zu "_".
 
-export const DEFAULT_ROOT = 'Pictures/Klettern_Bergsteigen';
+/**
+ * Standard für neue Konten. Wer schon einen Ordner hat (z. B. "Pictures/Klettern_Bergsteigen" aus der Android-App),
+ * hat ihn in der Daten-Datei stehen – der gilt dann. Sammelordner sind für neue Konten aus.
+ */
+export const DEFAULT_ROOT = 'Pictures/Tourenbuch';
+export const DEFAULT_GROUP_FOLDERS = false;
+
+/** Ablageordner und Sammelordner aus den gemeinsamen Einstellungen (sonst Standard). */
+export function storageSettings(doc) {
+  return {
+    root: cleanRoot(doc.settings.oneDriveRoot?.value ?? DEFAULT_ROOT),
+    groupFolders: doc.settings.groupFolders?.value ?? DEFAULT_GROUP_FOLDERS,
+    stored: !!doc.settings.oneDriveRoot,
+  };
+}
 export const UNKNOWN_MOUNTAIN = 'Unbekannter_Berg';
 const MAX_SEGMENT_LENGTH = 80;
 const CNTRL = /[\x00-\x1F\x7F]/g;

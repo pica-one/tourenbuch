@@ -2,9 +2,9 @@
 // Fotos in den Tour-Ordner (wird bei Bedarf angelegt), Topos/GPX in dessen Unterordner "Topos" bzw. "GPX".
 // Die Dateien bleiben nur im Speicher: wird die Seite vorher geschlossen, müssen sie neu ausgewählt werden.
 
-import { cleanFileName, DEFAULT_ROOT, photoFileName, tourFolderPath } from './naming.js';
+import { cleanFileName, photoFileName, storageSettings, tourFolderPath } from './naming.js';
 import { AuthError, BusyError } from './onedrive.js';
-import { addFile, setFolder } from './tourbook.js';
+import { addFile, setFolder, setSetting } from './tourbook.js';
 
 export const KIND_FOLDER = { TOPO: 'Topos', GPX: 'GPX' };
 
@@ -68,16 +68,9 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
     const tour = doc.tours.find((t) => t.id === tourId && t.deleted == null);
     if (!tour) return false;
     const folder = tour.oneDriveFolder?.value ?? null;
+    const storage = storageSettings(doc);
     const folderPath =
-      folder?.path ??
-      tourFolderPath(
-        doc.settings.oneDriveRoot?.value ?? DEFAULT_ROOT,
-        tour.tourType.value,
-        tour.mountain.value,
-        tour.dates.value.start,
-        tour.routeName?.value,
-        doc.settings.groupFolders?.value ?? true,
-      );
+      folder?.path ?? tourFolderPath(storage.root, tour.tourType.value, tour.mountain.value, tour.dates.value.start, tour.routeName?.value, storage.groupFolders);
     let name;
     if (kind) name = `${KIND_FOLDER[kind]}/${cleanFileName(file.name) ?? `${kind === 'TOPO' ? 'Topo' : 'GPX'}_${clock()}`}`;
     else {
@@ -112,6 +105,9 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
         // Tour-Ordner = Ordner oberhalb von "Topos"/"GPX" (seine Nummer kommt mit dem ersten Foto)
         next = setFolder(next, tourId, parentOf(parentOf(item.path)), null, now);
       }
+      // Erstes Hochladen eines neuen Kontos: verwendeten Ablageordner fest eintragen (ändert sich so nie von selbst)
+      if (!next.settings.oneDriveRoot) next = setSetting(next, 'oneDriveRoot', storage.root, now);
+      if (!next.settings.groupFolders) next = setSetting(next, 'groupFolders', storage.groupFolders, now);
       return next;
     });
     return true;
