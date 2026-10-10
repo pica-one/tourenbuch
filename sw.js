@@ -3,7 +3,7 @@
 // Strategie: zuerst übers Netz (immer die neuste Version), ohne Internet aus dem Speicher.
 // Anfragen an Microsoft/OneDrive gehen nie über diesen Speicher.
 
-const CACHE = 'tourenbuch-v3';
+const CACHE = 'tourenbuch-v4';
 const MSAL = 'https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.28.1/lib/msal-browser.min.js';
 const SHELL = [
   './',
@@ -33,7 +33,7 @@ const SHELL = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE).then(async (cache) => {
-      await cache.addAll(SHELL);
+      await cache.addAll(SHELL.map((u) => new Request(u, { cache: 'no-cache' })));
       await cache.add(new Request(MSAL, { mode: 'cors' })).catch(() => {});
     }),
   );
@@ -59,7 +59,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   event.respondWith(
-    fetch(req)
+    // "no-cache": beim Server nachfragen, ob es eine neue Version gibt (GitHub erlaubt sonst 10 Minuten alte Dateien)
+    fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();
