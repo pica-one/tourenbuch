@@ -221,6 +221,10 @@ a { color: var(--primary); }
 .favtoggle .star { color: var(--text-2); }
 .favtoggle.on { background: var(--primary-container); color: var(--on-primary-container); border-color: transparent; }
 .favtoggle.on .star { color: #f5a623; }
+.rootfield { margin: 10px 0 0; }
+.rootfield > label { font-size: 0.85rem; color: var(--text-2); }
+.switchrow { cursor: pointer; }
+.switchrow input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--primary); flex: none; }
 select { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }
 
 /* Knöpfe */
