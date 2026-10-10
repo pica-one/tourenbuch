@@ -185,6 +185,32 @@ a { color: var(--primary); }
 .viewer-msg { position: absolute; left: 16px; right: 16px; bottom: 96px; margin: 0; padding: 12px; border-radius: 8px; background: rgba(0, 0, 0, 0.7); text-align: center; }
 .has-video .viewer-nav { top: 40%; height: 56px; width: 40px; }
 
+/* Statistik */
+.stats { display: flex; flex-direction: column; gap: 12px; }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tile strong { display: block; font-size: 1.8rem; color: var(--primary); line-height: 1.2; }
+.tile span { color: var(--text-2); font-size: 0.9rem; }
+.statcard h3 { margin: 0 0 10px; font-size: 1rem; font-weight: 600; }
+.statcard .big { margin: 0 0 8px; font-size: 1.05rem; }
+.statrow { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.statrow .badge { margin: 0; }
+.statlabel { width: 104px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.95rem; }
+.statlabel.wide { width: 120px; }
+.statnum { width: 32px; flex: none; text-align: right; font-size: 0.95rem; }
+.rank { width: 22px; flex: none; color: var(--text-2); }
+.statbar { flex: 1; height: 12px; margin: 0; border-radius: 6px; background: var(--surface-2); }
+.statbar span { border-radius: 6px; }
+.columns { display: flex; align-items: flex-end; gap: 3px; height: 150px; }
+.col { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+.colnum { font-size: 0.7rem; line-height: 1.4; }
+.colbar { width: 100%; background: var(--primary); border-radius: 4px 4px 0 0; }
+.collabels { display: flex; gap: 3px; margin-top: 4px; }
+.collabels span { flex: 1; min-width: 0; text-align: center; font-size: 0.7rem; color: var(--text-2); overflow: hidden; white-space: nowrap; }
+.highlight { display: flex; flex-direction: column; gap: 2px; padding: 12px; border-radius: 8px; background: var(--primary-container); color: var(--on-primary-container); text-decoration: none; }
+.highlight small { font-weight: 600; }
+.highlight strong { font-size: 1.05rem; }
+.highlight em { font-style: normal; text-decoration: underline; margin-top: 4px; }
+
 /* Einstellungen */
 .setting { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .setting:last-child { border-bottom: 0; }
