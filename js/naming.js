@@ -28,20 +28,22 @@ const RESERVED = new Set([
   'lpt0', 'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9',
 ]);
 
-/** "Piz / XYZ" -> "Piz-XYZ", "Südgrat: Variante A" -> "Südgrat_Variante_A". "" wenn nichts übrig bleibt. */
-export function cleanSegment(text) {
-  let s = String(text ?? '')
+/**
+ * "Piz / XYZ" -> "Piz-XYZ", "Südgrat: Variante A" -> "Südgrat_Variante_A". "" wenn nichts übrig bleibt.
+ * Mit keepSpaces bleiben Leerzeichen (einzeln) erhalten: "Schafberg Wildhaus", "Piz - XYZ" (für Bergnamen).
+ */
+export function cleanSegment(text, keepSpaces = false) {
+  const base = String(text ?? '')
     .replace(CNTRL, ' ')
     .replace(/[/\\|]/g, ' - ')
     .replace(/[:*?"<>]/g, ' ')
     .replaceAll('_vti_', ' ')
-    .trim()
-    .replace(/\s+/g, '_')
-    .replace(/_?-_?/g, '-')
-    .replace(/-{2,}/g, '-')
-    .replace(/_{2,}/g, '_');
+    .trim();
+  let s = keepSpaces
+    ? base.replace(/\s+/g, ' ').replace(/-( ?-)+/g, '-')
+    : base.replace(/\s+/g, '_').replace(/_?-_?/g, '-').replace(/-{2,}/g, '-').replace(/_{2,}/g, '_');
   s = trimChars(s, '_-. ~');
-  if (s.length > MAX_SEGMENT_LENGTH) s = trimEnd(s.slice(0, MAX_SEGMENT_LENGTH), '_-.');
+  if (s.length > MAX_SEGMENT_LENGTH) s = trimEnd(s.slice(0, MAX_SEGMENT_LENGTH), '_-. ');
   if (RESERVED.has(s.toLowerCase())) s = `${s}_`;
   return s;
 }
@@ -67,8 +69,9 @@ export function tourFolderName(startIso, route) {
   return r ? `${datePart(startIso)}_${r}` : datePart(startIso);
 }
 
+/** Ordner des Bergs / Orts mit Leerzeichen wie eingegeben: "Schafberg Wildhaus" (wie die bestehenden Ordner). */
 export function mountainFolderName(mountain) {
-  return cleanSegment(mountain) || UNKNOWN_MOUNTAIN;
+  return cleanSegment(mountain, true) || UNKNOWN_MOUNTAIN;
 }
 
 export function groupFolder(type) {
@@ -92,7 +95,7 @@ export function cleanFileName(name) {
 
 /** Ersatzname eines Fotos ohne brauchbaren Namen: "20260927_Titlis_01.jpg" */
 export function photoFileName(mountain, startIso, number, mimeType) {
-  return `${datePart(startIso)}_${mountainFolderName(mountain)}_${String(number).padStart(2, '0')}.${extension(mimeType)}`;
+  return `${datePart(startIso)}_${cleanSegment(mountain) || UNKNOWN_MOUNTAIN}_${String(number).padStart(2, '0')}.${extension(mimeType)}`;
 }
 
 function extension(mimeType) {
