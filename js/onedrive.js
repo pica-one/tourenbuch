@@ -125,10 +125,15 @@ export function createOneDrive(getToken, fetchFn = (...a) => fetch(...a)) {
       }
     },
 
+    /** Wie listChildren, aber über den Pfad (z. B. "Pictures/Tourenbuch"); null, wenn es den Ordner nicht gibt. */
+    listChildrenByPath(path) {
+      return this.listChildren(null, `${BASE}/me/drive/root:/${encodePath(path)}:/children?$top=999&$select=id,name,size,folder,file,photo`);
+    },
+
     /** Inhalt eines Ordners: [{ id, name, isFolder, mimeType, takenDateTime }]; null, wenn es ihn nicht gibt. */
-    async listChildren(folderId) {
+    async listChildren(folderId, firstUrl = null) {
       const items = [];
-      let next = `${BASE}/me/drive/items/${encodeURIComponent(folderId)}/children?$top=999&$select=id,name,size,folder,file,photo`;
+      let next = firstUrl ?? `${BASE}/me/drive/items/${encodeURIComponent(folderId)}/children?$top=999&$select=id,name,size,folder,file,photo`;
       try {
         while (next) {
           const json = await (await call(next)).json();

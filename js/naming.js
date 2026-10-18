@@ -85,6 +85,58 @@ export function tourFolderPath(root, type, mountain, startIso, route, useGroupFo
     .join('/');
 }
 
+/** Ordner, in dem die Berg-Ordner liegen: Ablageordner, evtl. mit Sammelordner ("…/Klettersteige"). */
+export function mountainBase(root, type, useGroupFolders = true) {
+  return [cleanRoot(root), useGroupFolders ? groupFolder(type) : null].filter(Boolean).join('/');
+}
+
+/**
+ * Vergleichs-Schlüssel für Ordnernamen: "Föhnmauer", "Foehnmauer", "foehn_mauer" -> "foehnmauer".
+ * ä/ö/ü -> ae/oe/ue, ß -> ss, Akzente weg, Gross/klein egal, Leerzeichen/_/- und Satzzeichen zählen nicht.
+ */
+export function folderKey(name) {
+  return String(name ?? '')
+    .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Bestehenden Berg-Ordner aus früheren Touren finden: Tour-Ordner liegen in <base>/<Berg>/<Datum_Route>.
+ * folders = [{ path, start }] (Tour-Ordner und Startdatum). Die zuletzt verwendete Schreibweise gewinnt.
+ * Ergebnis: ganzer Pfad des Berg-Ordners oder null.
+ */
+export function mountainFolderFromTours(folders, base, mountain) {
+  const key = folderKey(mountain);
+  if (!key) return null;
+  const baseLower = base.toLowerCase();
+  const hits = folders
+    .map((f) => ({ dir: parentPath(f.path ?? ''), start: f.start ?? '' }))
+    .filter(({ dir }) => dir && parentPath(dir).toLowerCase() === baseLower && folderKey(lastSegment(dir)) === key)
+    .sort((a, b) => (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
+  return hits[0]?.dir ?? null;
+}
+
+/** Passenden Berg-Ordner unter den Unterordnern von base finden ([{ name, isFolder }]) oder null. */
+export function mountainFolderFromListing(items, base, mountain) {
+  const key = folderKey(mountain);
+  const hit = key ? (items ?? []).find((i) => i.isFolder && folderKey(i.name) === key) : null;
+  return hit ? `${base}/${hit.name}` : null;
+}
+
+function parentPath(path) {
+  return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+}
+
+function lastSegment(path) {
+  return path.slice(path.lastIndexOf('/') + 1);
+}
+
 /** Dateiname so, wie er ist – nur Zeichen, die OneDrive nicht erlaubt, werden zu "_". null wenn unbrauchbar. */
 export function cleanFileName(name) {
   const clean = trimChars(String(name ?? '').replace(CNTRL, '_').replace(/[/\\:*?"<>|]/g, '_').trim(), '. ');

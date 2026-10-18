@@ -2,7 +2,16 @@
 // Fotos in den Tour-Ordner (wird bei Bedarf angelegt), Topos/GPX in dessen Unterordner "Topos" bzw. "GPX".
 // Die Dateien bleiben nur im Speicher: wird die Seite vorher geschlossen, müssen sie neu ausgewählt werden.
 
-import { cleanFileName, photoFileName, storageSettings, tourFolderPath } from './naming.js';
+import {
+  cleanFileName,
+  mountainBase,
+  mountainFolderFromListing,
+  mountainFolderFromTours,
+  mountainFolderName,
+  photoFileName,
+  storageSettings,
+  tourFolderName,
+} from './naming.js';
 import { AuthError, BusyError } from './onedrive.js';
 import { addFile, setFolder, setSetting } from './tourbook.js';
 
@@ -62,6 +71,21 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
     }
   }
 
+  /**
+   * Ordner für eine Tour, die noch keinen hat. Gibt es den Berg-Ordner schon (auch anders geschrieben,
+   * z. B. "Foehnmauer" für "Föhnmauer"), kommt die Tour dort hinein – zuerst aus früheren Touren, sonst auf OneDrive gesucht.
+   */
+  async function newTourFolderPath(doc, tour, storage) {
+    const mountain = tour.mountain.value;
+    const base = mountainBase(storage.root, tour.tourType.value, storage.groupFolders);
+    const known = doc.tours
+      .filter((t) => t.deleted == null && t.id !== tour.id && t.oneDriveFolder?.value?.path)
+      .map((t) => ({ path: t.oneDriveFolder.value.path, start: t.dates?.value?.start }));
+    let dir = mountainFolderFromTours(known, base, mountain);
+    if (!dir && drive.listChildrenByPath) dir = mountainFolderFromListing(await drive.listChildrenByPath(base), base, mountain);
+    return `${dir ?? `${base}/${mountainFolderName(mountain)}`}/${tourFolderName(tour.dates.value.start, tour.routeName?.value)}`;
+  }
+
   /** true = hochgeladen, false = übersprungen (Tour inzwischen gelöscht) */
   async function uploadOne({ tourId, file, kind }) {
     const doc = book.current();
@@ -69,8 +93,7 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
     if (!tour) return false;
     const folder = tour.oneDriveFolder?.value ?? null;
     const storage = storageSettings(doc);
-    const folderPath =
-      folder?.path ?? tourFolderPath(storage.root, tour.tourType.value, tour.mountain.value, tour.dates.value.start, tour.routeName?.value, storage.groupFolders);
+    const folderPath = folder?.path ?? (await newTourFolderPath(doc, tour, storage));
     let name;
     if (kind) name = `${KIND_FOLDER[kind]}/${cleanFileName(file.name) ?? `${kind === 'TOPO' ? 'Topo' : 'GPX'}_${clock()}`}`;
     else {
