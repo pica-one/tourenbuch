@@ -3,6 +3,8 @@
 const BASE = 'https://graph.microsoft.com/v1.0';
 /** Stückgrösse muss ein Vielfaches von 320 KiB sein (Vorgabe von Microsoft): 16 x 320 KiB = 5 MiB. */
 const CHUNK_SIZE = 16 * 320 * 1024;
+/** Bis zu dieser Grösse in einem Schritt hochladen (normales Handy-Foto), grössere (Videos) in Stücken. */
+const SIMPLE_UPLOAD_MAX = 8 * 1024 * 1024;
 
 export class OneDriveError extends Error {
   constructor(message, status) {
@@ -78,6 +80,19 @@ export function createOneDrive(getToken, fetchFn = (...a) => fetch(...a)) {
      */
     async upload(target, file, onProgress = () => {}) {
       if (!file.size) throw new OneDriveError('Die Datei ist leer.', 0);
+      const base = target.folderId
+        ? `${BASE}/me/drive/items/${encodeURIComponent(target.folderId)}:/${encodePath(target.name)}:`
+        : `${BASE}/me/drive/root:/${encodePath(target.path)}:`;
+      // Normale Fotos (bis 8 MiB) in einem Schritt: eine Anfrage statt Upload-Sitzung + Stücke (schneller)
+      if (file.size <= SIMPLE_UPLOAD_MAX) {
+        const res = await call(`${base}/content?@microsoft.graph.conflictBehavior=rename`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: file,
+        });
+        onProgress(1);
+        return uploadedItem(await res.json());
+      }
       const url = target.folderId
         ? `${BASE}/me/drive/items/${encodeURIComponent(target.folderId)}:/${encodePath(target.name)}:/createUploadSession`
         : `${BASE}/me/drive/root:/${encodePath(target.path)}:/createUploadSession`;
@@ -115,11 +130,7 @@ export function createOneDrive(getToken, fetchFn = (...a) => fetch(...a)) {
         if (!res.ok) throw await toError(res);
         offset = end;
         onProgress(offset / size);
-        if (res.status === 200 || res.status === 201) {
-          const item = await res.json();
-          const parentPath = decodeURIComponent((item.parentReference?.path ?? '').split('root:')[1] ?? '').replace(/^\/+/, '');
-          return { id: item.id, name: item.name, path: parentPath ? `${parentPath}/${item.name}` : item.name, parentId: item.parentReference?.id ?? null };
-        }
+        if (res.status === 200 || res.status === 201) return uploadedItem(await res.json());
       }
       throw new OneDriveError('Upload unvollständig.', 0);
       }
@@ -223,6 +234,12 @@ export function createOneDrive(getToken, fetchFn = (...a) => fetch(...a)) {
       }
     },
   };
+}
+
+/** Antwort von OneDrive nach dem Hochladen -> { id, name, path, parentId } */
+function uploadedItem(item) {
+  const parentPath = decodeURIComponent((item.parentReference?.path ?? '').split('root:')[1] ?? '').replace(/^\/+/, '');
+  return { id: item.id, name: item.name, path: parentPath ? `${parentPath}/${item.name}` : item.name, parentId: item.parentReference?.id ?? null };
 }
 
 async function toError(res) {

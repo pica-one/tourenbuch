@@ -2,7 +2,7 @@
 // Original herunterladen, teilen. Die Bilder kommen in guter Qualität (2048 px) von OneDrive.
 
 import { icon } from './icons.js';
-import { isVideoName } from './tourbook.js';
+import { isImageName, isVideoName } from './tourbook.js';
 import { esc, showToast } from './ui.js';
 
 /**
@@ -26,13 +26,15 @@ export function openViewer({ photos, start, drive, thumbs, onRemove }) {
   function draw() {
     const p = photos[index];
     const video = isVideoName(p.fileName);
+    // Topo als PDF o. ä.: gezeigt wird die Vorschau (erste Seite), geteilt würde nur das Bild – darum dort nicht teilen
+    const doc = !video && !isImageName(p.fileName);
     const known = thumbs.get(p.oneDriveItemId);
     el.classList.toggle('has-video', video);
     el.innerHTML = `
       <div class="viewer-bar">
         <button class="iconbtn" data-v="close" aria-label="Schliessen">${icon('close')}</button>
         <span class="viewer-title">${esc(p.fileName)}<small>${index + 1} / ${photos.length}${video ? ' · Video' : ''}</small></span>
-        ${canShare && !video ? `<button class="iconbtn" data-v="share" aria-label="Teilen">${icon('share')}</button>` : ''}
+        ${canShare && !video && !doc ? `<button class="iconbtn" data-v="share" aria-label="Teilen">${icon('share')}</button>` : ''}
         <button class="iconbtn" data-v="download" aria-label="Original herunterladen">${icon('download')}</button>
         ${onRemove ? `<button class="iconbtn" data-v="remove" aria-label="Aus Tour entfernen">${icon('delete')}</button>` : ''}
       </div>

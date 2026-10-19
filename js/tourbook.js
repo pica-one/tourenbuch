@@ -112,6 +112,11 @@ export function isPhotoItem(item) {
   return (item.mimeType ?? '').startsWith('image/') || PHOTO_EXTENSIONS.includes(extensionOf(item.name));
 }
 
+/** Bilddatei (Foto oder Topo als Bild) – im Gegensatz z. B. zu einem Topo als PDF. */
+export function isImageName(name) {
+  return [...PHOTO_EXTENSIONS, 'bmp', 'dng', 'tif', 'tiff'].includes(extensionOf(name));
+}
+
 /** Videos stehen in der Daten-Datei bei den Fotos; erkannt werden sie an der Endung (siehe Datenformat.md). */
 export function isVideoName(name) {
   return VIDEO_EXTENSIONS.includes(extensionOf(name));

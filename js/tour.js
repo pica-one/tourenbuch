@@ -65,7 +65,7 @@ export function renderTour(root, id, ctx) {
             .join('')}</div>`
         : '<div class="panel muted">Keine Fotos</div>'}
     </div>
-    ${fileSection('Topo', 'TOPO', topos, offline)}
+    ${topoSection(topos, offline)}
     ${fileSection('GPX', 'GPX', gpx, offline)}`;
 
   // Ordner im OneDrive-Web öffnen
@@ -106,8 +106,41 @@ export function renderTour(root, id, ctx) {
       });
   });
 
+  // Topos: Betrachter (Bilder und PDF – OneDrive liefert von PDF die erste Seite)
+  root.querySelectorAll('[data-topo]').forEach((b) => {
+    b.onclick = () =>
+      openViewer({
+        photos: [...topos],
+        start: Number(b.dataset.topo),
+        drive: ctx.drive,
+        thumbs,
+        onRemove: offline
+          ? null
+          : async (f) => {
+              await ctx.book.update((doc) => removeFile(doc, t.id, f.id, Date.now()));
+              ctx.afterChange();
+            },
+      });
+  });
+
   fillThumbs(root, ctx.drive);
   if (!offline && photos.length) loadThumbs(ctx.drive, folder, photos).then(() => fillThumbs(root, ctx.drive));
+  if (!offline && topos.length) loadThumbs(ctx.drive, null, topos).then(() => fillThumbs(root, ctx.drive));
+}
+
+/** Topos als Vorschaubilder wie die Fotos, mit Dateiname darunter. */
+function topoSection(topos, offline) {
+  return `<div class="section">
+    <div class="sectionhead"><h2>Topo${topos.length ? ` <span class="muted">(${topos.length})</span>` : ''}</h2>
+      <button class="btn outline small" data-add="TOPO" ${offline ? 'disabled' : ''}>${icon('add', 18)} Topo</button></div>
+    ${topos.length
+      ? `<div class="grid">${topos
+          .map((f, i) => `<button class="cell topo" data-topo="${i}" aria-label="${esc(f.fileName)}"><img data-item="${esc(f.oneDriveItemId)}" alt="" loading="lazy">
+            <span class="ext" aria-hidden="true">${esc((f.fileName.split('.').pop() || 'Topo').slice(0, 4).toUpperCase())}</span>
+            <span class="caption">${esc(f.fileName)}</span></button>`)
+          .join('')}</div>`
+      : '<div class="panel muted">Kein Topo</div>'}
+  </div>`;
 }
 
 // ---------- Dateien auswählen ----------
