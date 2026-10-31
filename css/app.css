@@ -157,6 +157,13 @@ a { color: var(--primary); }
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; padding: 2px 6px; font-size: 0.7rem; text-align: left;
   color: #fff; background: rgba(0, 0, 0, 0.55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.cell .heart {
+  position: absolute; top: 4px; right: 4px; z-index: 2; width: 26px; height: 26px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font-size: 16px; line-height: 1;
+  background: rgba(255, 255, 255, 0.9); color: #e0245e; pointer-events: none;
+}
+.viewer .iconbtn.like { font-size: 1.5rem; line-height: 1; }
+.viewer .iconbtn.like.on { color: #ff4d79; }
 .cell .play {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
@@ -217,6 +224,11 @@ a { color: var(--primary); }
 .highlight small { font-weight: 600; }
 .highlight strong { font-size: 1.05rem; }
 .highlight em { font-style: normal; text-decoration: underline; margin-top: 4px; }
+
+/* Fotobuch */
+.pblist { margin: 0 0 12px; padding-left: 20px; font-size: 0.9rem; }
+.pblist li { margin: 2px 0; }
+a.btn { text-decoration: none; }
 
 /* Einstellungen */
 .setting { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
