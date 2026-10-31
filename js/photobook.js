@@ -10,8 +10,15 @@ const JSPDF_SRI = 'sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoV
 
 // Seite A4 quer in mm
 export const PAGE = { w: 297, h: 210, margin: 12, captionH: 10, gap: 4 };
-/** Druckqualität: Bildpunkte pro mm (200 dpi ≈ 7.9) – gut für Fotobücher, Datei bleibt handlich. */
-const PX_PER_MM = 7.9;
+/**
+ * Druckqualität: Bildpunkte pro mm und Quelle der Fotos.
+ * standard: 200 dpi aus der 2048-Pixel-Version von OneDrive – gut für Fotobücher, Datei bleibt handlich.
+ * high: 300 dpi aus dem Original (etwa 3–4 Mal grösser, dauert länger; am besten am PC).
+ */
+export const QUALITY = {
+  standard: { pxPerMm: 7.9, jpeg: 0.9, original: false },
+  high: { pxPerMm: 11.8, jpeg: 0.92, original: true },
+};
 
 /** Touren im Zeitraum mit ihren gelikten Fotos (ohne Videos), älteste zuerst. */
 export function photobookSelection(doc, fromIso, toIso) {
@@ -118,17 +125,49 @@ function loadJsPdf() {
   return jsPdfLoading;
 }
 
-/** Foto in Druckqualität laden (2048 px von OneDrive) -> ImageBitmap */
-async function loadPhoto(drive, photo) {
-  const url = await drive.thumbnailUrl(photo.oneDriveItemId, 'c2048x2048');
-  if (!url) throw new Error(`„${photo.fileName}“ ist auf OneDrive nicht mehr zu finden.`);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`„${photo.fileName}“ konnte nicht geladen werden.`);
-  return createImageBitmap(await res.blob());
+/** Wartezeiten zwischen den Versuchen, ein Foto zu laden (OneDrive bremst bei vielen grossen Bildern kurz). */
+const RETRY_WAITS_MS = [1000, 3000, 8000];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function fetchBlob(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+  return res.blob();
+}
+
+/**
+ * Foto laden -> ImageBitmap, oder null wenn es nicht geht. Standard: 2048-Pixel-Version von OneDrive;
+ * hoch: das Original (kann der Browser es nicht lesen, z. B. HEIC vom iPhone, dann doch die 2048-Pixel-Version).
+ * Bei Netzfehlern ("Failed to fetch") mehrmals versuchen, jedes Mal mit frischer Adresse.
+ */
+async function loadPhoto(drive, photo, wait, quality) {
+  let useOriginal = quality.original;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      if (useOriginal) {
+        const url = await drive.downloadUrl(photo.oneDriveItemId);
+        if (!url) return null; // auf OneDrive nicht mehr vorhanden
+        const blob = await fetchBlob(url);
+        try {
+          return await createImageBitmap(blob, { imageOrientation: 'from-image' });
+        } catch {
+          useOriginal = false; // Format kann der Browser nicht lesen
+        }
+      }
+      const url = await drive.thumbnailUrl(photo.oneDriveItemId, 'c2048x2048');
+      if (!url) return null;
+      return await createImageBitmap(await fetchBlob(url));
+    } catch (e) {
+      if (e?.status === 401) throw e; // abgemeldet: nicht weiter versuchen
+      if (e?.status === 404) return null;
+    }
+    if (attempt >= RETRY_WAITS_MS.length) return null;
+    await wait(RETRY_WAITS_MS[attempt]);
+  }
 }
 
 /** Bild für ein Feld zuschneiden (cover) bzw. einpassen (contain) und als JPEG liefern. */
-function renderCell(bitmap, cell) {
+function renderCell(bitmap, cell, quality) {
   const ratio = bitmap.width / bitmap.height;
   let { x, y, w, h } = cell;
   let sx = 0;
@@ -154,48 +193,58 @@ function renderCell(bitmap, cell) {
     sy = (bitmap.height - sh) / 2;
   }
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.min(Math.round(w * PX_PER_MM), Math.round(sw)));
+  canvas.width = Math.max(1, Math.min(Math.round(w * quality.pxPerMm), Math.round(sw)));
   canvas.height = Math.max(1, Math.round(canvas.width * (h / w)));
   const ctx2d = canvas.getContext('2d');
+  ctx2d.imageSmoothingQuality = 'high';
   ctx2d.drawImage(bitmap, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-  return { data: canvas.toDataURL('image/jpeg', 0.9), x, y, w, h };
+  const data = canvas.toDataURL('image/jpeg', quality.jpeg);
+  canvas.width = canvas.height = 0; // Speicher gleich freigeben
+  return { data, x, y, w, h };
 }
 
 /**
- * Erstellt das PDF. onProgress(fertig, gesamt). Ergebnis: Blob (application/pdf).
+ * Erstellt das PDF. onProgress(fertig, gesamt). Ergebnis: { blob (application/pdf), missing: [Dateinamen] }.
+ * Fotos, die auch nach mehreren Versuchen nicht laden, fehlen im PDF und stehen in missing.
  * Die Fotos werden der Reihe nach geladen, damit auch grosse Bücher wenig Speicher brauchen.
  */
-export async function createPhotobookPdf(drive, selection, onProgress = () => {}) {
+export async function createPhotobookPdf(drive, selection, onProgress = () => {}, { wait = sleep, quality = QUALITY.standard } = {}) {
   const { jsPDF } = await loadJsPdf();
   const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
   const total = selection.reduce((n, x) => n + x.photos.length, 0);
+  const missing = [];
   let done = 0;
-  let first = true;
+  let pages = 0;
   for (const { tour, photos } of selection) {
     for (const group of groupPhotos(photos)) {
-      if (!first) pdf.addPage('a4', 'landscape');
-      first = false;
+      const items = [];
+      for (const photo of group) {
+        const bitmap = await loadPhoto(drive, photo, wait, quality);
+        if (bitmap) items.push({ bitmap, ratio: bitmap.width / bitmap.height });
+        else {
+          missing.push(photo.fileName);
+          onProgress(++done, total);
+        }
+      }
+      if (!items.length) continue;
+      if (pages++) pdf.addPage('a4', 'landscape');
       // Tourname · Route · Datum über den Fotos
       pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(11);
       pdf.setTextColor(60, 60, 60);
       pdf.text(captionOf(tour), PAGE.margin, PAGE.margin + 5);
-      const items = [];
-      for (const photo of group) {
-        const bitmap = await loadPhoto(drive, photo);
-        items.push({ bitmap, ratio: bitmap.width / bitmap.height });
-      }
       const ordered = orderForLayout(items);
       const cells = layoutCells(ordered.map((i) => i.ratio));
       ordered.forEach((item, i) => {
-        const img = renderCell(item.bitmap, cells[i]);
+        const img = renderCell(item.bitmap, cells[i], quality);
         pdf.addImage(img.data, 'JPEG', img.x, img.y, img.w, img.h, undefined, 'FAST');
         item.bitmap.close?.();
         onProgress(++done, total);
       });
     }
   }
-  return pdf.output('blob');
+  if (!pages) throw new Error('Keines der Fotos konnte von OneDrive geladen werden. Bitte Internet prüfen und nochmals versuchen.');
+  return { blob: pdf.output('blob'), missing };
 }
 
 // ---------- Bildschirm ----------
@@ -216,6 +265,12 @@ export function renderPhotobook(root, ctx, state) {
         <label class="field"><span>Von</span><input type="date" id="pbFrom" value="${state.from}" ${state.running ? 'disabled' : ''}></label>
         <label class="field"><span>Bis</span><input type="date" id="pbTo" value="${state.to}" ${state.running ? 'disabled' : ''}></label>
       </div>
+      <div style="margin-bottom:12px"><span class="muted" style="font-size:.85rem">Druckqualität</span>
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-weight:normal"><input type="radio" name="pbQuality" value="standard" ${state.quality !== 'high' ? 'checked' : ''} ${state.running ? 'disabled' : ''}>
+          Standard (200 dpi) – kleine Datei, schnell</label>
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-weight:normal"><input type="radio" name="pbQuality" value="high" ${state.quality === 'high' ? 'checked' : ''} ${state.running ? 'disabled' : ''}>
+          Hoch (300 dpi, aus den Originalen) – etwa 3–4 Mal grösser, dauert länger, am besten am PC</label>
+      </div>
       <p><strong>${selection.length} ${selection.length === 1 ? 'Tour' : 'Touren'} · ${photoTotal} ${photoTotal === 1 ? 'Foto' : 'Fotos'} mit ♥</strong></p>
       ${selection.length ? `<ul class="pblist">${selection.map((x) => `<li>${esc(captionOf(x.tour))} <span class="muted">(${x.photos.length})</span></li>`).join('')}</ul>` : '<p class="muted">Keine Fotos mit ♥ in diesem Zeitraum. Like Fotos in der Grossansicht mit dem Herz.</p>'}
       ${state.running
@@ -223,8 +278,7 @@ export function renderPhotobook(root, ctx, state) {
            <div class="bar"><span style="width:${Math.round((100 * state.progress[0]) / Math.max(1, state.progress[1]))}%"></span></div></div>`
         : `<button class="btn wide" id="pbCreate" ${selection.length && !ctx.demo ? '' : 'disabled'}>PDF erstellen</button>`}
       ${state.error ? `<p class="formerror">${esc(state.error)}</p>` : ''}
-      <p class="muted" style="font-size:.85rem">Tipp: am PC erstellen – bei vielen Fotos braucht das PDF einiges an Speicher.
-        Die Fotos werden in Druckqualität (ca. 200 dpi) von OneDrive geladen.</p>
+      <p class="muted" style="font-size:.85rem">Tipp: am PC erstellen – bei vielen Fotos braucht das PDF einiges an Speicher.</p>
     </div></div>`;
   const from = root.querySelector('#pbFrom');
   const to = root.querySelector('#pbTo');
@@ -235,19 +289,20 @@ export function renderPhotobook(root, ctx, state) {
   };
   from.onchange = onDate;
   to.onchange = onDate;
+  root.querySelectorAll('input[name="pbQuality"]').forEach((r) => (r.onchange = () => (state.quality = r.value)));
   root.querySelector('#pbCreate')?.addEventListener('click', async () => {
     state.running = true;
     state.error = null;
     state.progress = [0, photoTotal];
     renderPhotobook(root, ctx, state);
     try {
-      const blob = await createPhotobookPdf(ctx.drive, selection, (d, t) => {
+      const { blob, missing } = await createPhotobookPdf(ctx.drive, selection, (d, t) => {
         state.progress = [d, t];
         const text = root.querySelector('.uploadtext');
         const bar = root.querySelector('.bar span');
         if (text) text.textContent = `Erstelle PDF … Foto ${d} von ${t}`;
         if (bar) bar.style.width = `${Math.round((100 * d) / Math.max(1, t))}%`;
-      });
+      }, { quality: QUALITY[state.quality] ?? QUALITY.standard });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = `Fotobuch_${state.from}_bis_${state.to}.pdf`;
@@ -255,9 +310,15 @@ export function renderPhotobook(root, ctx, state) {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+      if (missing.length) {
+        state.error = `PDF erstellt, aber ${missing.length} ${missing.length === 1 ? 'Foto konnte' : 'Fotos konnten'} nicht geladen werden `
+          + `und ${missing.length === 1 ? 'fehlt' : 'fehlen'}: ${missing.join(', ')}. Am besten nochmals erstellen.`;
+      }
     } catch (e) {
       console.error(e);
-      state.error = e.message || 'Das PDF konnte nicht erstellt werden.';
+      state.error = e.status === 401 ? 'Bitte neu bei OneDrive anmelden und nochmals versuchen.'
+        : /fetch|network/i.test(e.message || '') ? 'Keine Verbindung zu OneDrive. Bitte Internet prüfen und nochmals versuchen.'
+        : e.message || 'Das PDF konnte nicht erstellt werden.';
     } finally {
       state.running = false;
       if (root.isConnected && location.hash.startsWith('#/fotobuch')) renderPhotobook(root, ctx, state);
