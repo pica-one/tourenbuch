@@ -3,7 +3,7 @@
 // Strategie: zuerst übers Netz (immer die neuste Version), ohne Internet aus dem Speicher.
 // Anfragen an Microsoft/OneDrive gehen nie über diesen Speicher.
 
-const CACHE = 'tourenbuch-v4';
+const CACHE = 'tourenbuch-v5';
 const MSAL = 'https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.28.1/lib/msal-browser.min.js';
 const SHELL = [
   './',
@@ -19,6 +19,7 @@ const SHELL = [
   'js/naming.js',
   'js/onedrive.js',
   'js/store.js',
+  'js/photobook.js',
   'js/stats.js',
   'js/sync.js',
   'js/tour.js',
