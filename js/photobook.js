@@ -34,6 +34,64 @@ export function captionOf(tour) {
 }
 
 /**
+ * Aussehen der Seiten: Hintergrund, Farben für Titel/Text, Akzent (kleiner Balken vor dem Titel),
+ * frame = weisser Rand um die Fotos (wie Abzüge).
+ */
+export const THEMES = {
+  creme: { label: 'Creme', bg: [246, 241, 232], title: [52, 44, 36], text: [128, 116, 100], accent: [166, 124, 82], frame: true },
+  weiss: { label: 'Weiss', bg: [255, 255, 255], title: [34, 34, 34], text: [120, 120, 120], accent: [46, 94, 78], frame: false },
+  dunkel: { label: 'Dunkel', bg: [30, 31, 33], title: [240, 238, 232], text: [165, 160, 150], accent: [201, 169, 110], frame: false },
+};
+
+const FRAME_MM = 1.5;
+
+// Schrift für die Tournamen (Bebas Neue, frei verwendbar), mit Prüfsumme wie jsPDF
+const TITLE_FONT_URL = 'https://cdn.jsdelivr.net/npm/@expo-google-fonts/bebas-neue@0.4.1/400Regular/BebasNeue_400Regular.ttf';
+const TITLE_FONT_SRI = 'sha256-gw6hhqz/wjFu0aTkIxkka6O0awTjOiEQeSSb+QEZPwQ=';
+let titleFont = null;
+
+/** Schrift laden (base64) oder null – dann wird eine Standardschrift genommen. */
+async function loadTitleFont() {
+  if (titleFont) return titleFont;
+  try {
+    const res = await fetch(TITLE_FONT_URL, { integrity: TITLE_FONT_SRI });
+    if (!res.ok) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    titleFont = btoa(bin);
+    return titleFont;
+  } catch {
+    return null;
+  }
+}
+
+/** Kopf einer Seite: Akzent-Balken, Tourname gross, daneben Route · Datum; unten rechts die Seitenzahl. */
+function drawPage(pdf, tour, theme, hasTitleFont, pageNo) {
+  const { w, h, margin } = PAGE;
+  pdf.setFillColor(...theme.bg);
+  pdf.rect(0, 0, w, h, 'F');
+  pdf.setFillColor(...theme.accent);
+  pdf.rect(margin, margin, 1.6, 7, 'F');
+  const x = margin + 4.5;
+  const base = margin + 6.6;
+  if (hasTitleFont) pdf.setFont('BebasNeue', 'normal');
+  else pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(hasTitleFont ? 24 : 16);
+  pdf.setTextColor(...theme.title);
+  const title = hasTitleFont ? tour.mountain.value.toUpperCase() : tour.mountain.value;
+  pdf.text(title, x, base);
+  const titleW = pdf.getTextWidth(title); // in der Titelschrift messen
+  const sub = [tour.routeName?.value, dateRange(tour.dates.value)].filter(Boolean).join('  ·  ');
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(10);
+  pdf.setTextColor(...theme.text);
+  pdf.text(sub, x + titleW + 4, base);
+  pdf.setFontSize(8);
+  pdf.text(String(pageNo), w - margin, h - 5, { align: 'right' });
+}
+
+/**
  * Fotos einer Tour auf Seiten verteilen: locker gemischt 1–4 Fotos pro Seite (mehrere öfter als einzelne).
  * random = Zufallszahl 0..1 (für Tests einstellbar). Ergebnis: Liste von Foto-Gruppen.
  */
@@ -208,9 +266,15 @@ function renderCell(bitmap, cell, quality) {
  * Fotos, die auch nach mehreren Versuchen nicht laden, fehlen im PDF und stehen in missing.
  * Die Fotos werden der Reihe nach geladen, damit auch grosse Bücher wenig Speicher brauchen.
  */
-export async function createPhotobookPdf(drive, selection, onProgress = () => {}, { wait = sleep, quality = QUALITY.standard } = {}) {
+export async function createPhotobookPdf(drive, selection, onProgress = () => {}, { wait = sleep, quality = QUALITY.standard, theme = THEMES.creme } = {}) {
   const { jsPDF } = await loadJsPdf();
   const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
+  const font = await loadTitleFont();
+  if (font) {
+    pdf.addFileToVFS('BebasNeue.ttf', font);
+    pdf.addFont('BebasNeue.ttf', 'BebasNeue', 'normal');
+  }
+  const hasTitleFont = Boolean(font);
   const total = selection.reduce((n, x) => n + x.photos.length, 0);
   const missing = [];
   let done = 0;
@@ -228,15 +292,18 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
       }
       if (!items.length) continue;
       if (pages++) pdf.addPage('a4', 'landscape');
-      // Tourname · Route · Datum über den Fotos
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(11);
-      pdf.setTextColor(60, 60, 60);
-      pdf.text(captionOf(tour), PAGE.margin, PAGE.margin + 5);
+      drawPage(pdf, tour, theme, hasTitleFont, pages);
       const ordered = orderForLayout(items);
       const cells = layoutCells(ordered.map((i) => i.ratio));
+      const f = theme.frame ? FRAME_MM : 0;
       ordered.forEach((item, i) => {
-        const img = renderCell(item.bitmap, cells[i], quality);
+        const c = cells[i];
+        const img = renderCell(item.bitmap, { ...c, x: c.x + f, y: c.y + f, w: c.w - 2 * f, h: c.h - 2 * f }, quality);
+        if (f) {
+          // weisser Rand wie bei einem Abzug
+          pdf.setFillColor(255, 255, 255);
+          pdf.rect(img.x - f, img.y - f, img.w + 2 * f, img.h + 2 * f, 'F');
+        }
         pdf.addImage(img.data, 'JPEG', img.x, img.y, img.w, img.h, undefined, 'FAST');
         item.bitmap.close?.();
         onProgress(++done, total);
@@ -265,6 +332,15 @@ export function renderPhotobook(root, ctx, state) {
         <label class="field"><span>Von</span><input type="date" id="pbFrom" value="${state.from}" ${state.running ? 'disabled' : ''}></label>
         <label class="field"><span>Bis</span><input type="date" id="pbTo" value="${state.to}" ${state.running ? 'disabled' : ''}></label>
       </div>
+      <div style="margin-bottom:12px"><span class="muted" style="font-size:.85rem">Hintergrund</span>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px">
+          ${Object.entries(THEMES).map(([key, t]) => `
+            <label style="display:flex;gap:6px;align-items:center;font-weight:normal">
+              <input type="radio" name="pbTheme" value="${key}" ${(state.theme ?? 'creme') === key ? 'checked' : ''} ${state.running ? 'disabled' : ''}>
+              <span style="width:18px;height:18px;border-radius:4px;border:1px solid #9998;background:rgb(${t.bg.join(',')})"></span>${t.label}
+            </label>`).join('')}
+        </div>
+      </div>
       <div style="margin-bottom:12px"><span class="muted" style="font-size:.85rem">Druckqualität</span>
         <label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-weight:normal"><input type="radio" name="pbQuality" value="standard" ${state.quality !== 'high' ? 'checked' : ''} ${state.running ? 'disabled' : ''}>
           Standard (200 dpi) – kleine Datei, schnell</label>
@@ -290,6 +366,7 @@ export function renderPhotobook(root, ctx, state) {
   from.onchange = onDate;
   to.onchange = onDate;
   root.querySelectorAll('input[name="pbQuality"]').forEach((r) => (r.onchange = () => (state.quality = r.value)));
+  root.querySelectorAll('input[name="pbTheme"]').forEach((r) => (r.onchange = () => (state.theme = r.value)));
   root.querySelector('#pbCreate')?.addEventListener('click', async () => {
     state.running = true;
     state.error = null;
@@ -302,7 +379,7 @@ export function renderPhotobook(root, ctx, state) {
         const bar = root.querySelector('.bar span');
         if (text) text.textContent = `Erstelle PDF … Foto ${d} von ${t}`;
         if (bar) bar.style.width = `${Math.round((100 * d) / Math.max(1, t))}%`;
-      }, { quality: QUALITY[state.quality] ?? QUALITY.standard });
+      }, { quality: QUALITY[state.quality] ?? QUALITY.standard, theme: THEMES[state.theme] ?? THEMES.creme });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = `Fotobuch_${state.from}_bis_${state.to}.pdf`;
