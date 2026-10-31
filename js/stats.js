@@ -109,6 +109,7 @@ export function renderStats(root, book, state) {
         ${s.longest ? `<a class="highlight" href="#/tour/${encodeURIComponent(s.longest.tourId)}">
           <small>Längste Tour</small><strong>${esc(s.longest.title)}</strong><span>${esc(s.longest.detail)}</span><em>Tour anzeigen</em></a>` : ''}
       </div>
+      <a class="btn wide" href="#/fotobuch">♥ Fotobuch (PDF) erstellen</a>
     </div>`;
   root.querySelectorAll('[data-year]').forEach((b) => {
     b.onclick = () => {

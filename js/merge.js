@@ -78,9 +78,10 @@ export function mergeFiles(local, remote) {
     // Nach dem Entfernen wieder hinzugefügt (z. B. "Mit OneDrive abgleichen")? Dann ist es wieder da.
     const readded = live.length > 0 && deleted.length > 0 && Math.max(...live.map((f) => f.added)) > Math.max(...deleted);
     if (readded || !deleted.length) {
-      result.push(oldest(live));
+      // Like: das jüngste aller Einträge desselben Fotos gilt
+      result.push(withLike(oldest(live), newestLike(same)));
     } else {
-      result.push({ ...oldest(same), deleted: Math.min(...deleted) });
+      result.push(withLike({ ...oldest(same), deleted: Math.min(...deleted) }, null));
     }
   }
   return result.sort((a, b) => a.added - b.added || cmp(a.fileName, b.fileName) || cmp(a.id, b.id));
@@ -95,12 +96,12 @@ function oldest(list) {
   return [...list].sort((a, b) => addedKey(a) - addedKey(b) || cmp(a.id, b.id))[0];
 }
 
-/** Dasselbe Foto auf beiden Seiten: Angaben ergänzen, gelöscht bleibt gelöscht. */
+/** Dasselbe Foto auf beiden Seiten (a = Daten-Datei, b = eigene Daten): Angaben ergänzen, gelöscht bleibt gelöscht. */
 function combine(a, b) {
   const added = [a.added, b.added].filter((x) => x > 0);
   const deleted = [a.deleted, b.deleted].filter((d) => d != null);
   const kind = a.kind ?? b.kind;
-  return {
+  const merged = {
     id: a.id,
     fileName: a.fileName || b.fileName,
     oneDriveItemId: a.oneDriveItemId ?? b.oneDriveItemId,
@@ -109,6 +110,20 @@ function combine(a, b) {
     deleted: deleted.length ? Math.min(...deleted) : null,
     ...(kind ? { kind } : {}),
   };
+  // Like wie ein Tour-Feld: jüngere Änderung gewinnt, bei gleicher Zeit die Daten-Datei
+  return withLike(merged, merged.deleted == null ? pick(b.liked, a.liked) : null);
+}
+
+/** Jüngstes Like mehrerer Einträge (bei gleicher Zeit gewinnt "gefällt mir"). */
+function newestLike(list) {
+  const likes = list.map((f) => f.liked).filter(Boolean);
+  if (!likes.length) return null;
+  return likes.sort((x, y) => y.changed - x.changed || Number(y.value) - Number(x.value))[0];
+}
+
+function withLike(file, liked) {
+  const { liked: _old, ...rest } = file;
+  return liked ? { ...rest, liked } : rest;
 }
 
 function mergePartners(local, remote) {

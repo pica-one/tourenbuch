@@ -93,6 +93,18 @@ export function removeFile(doc, tourId, fileId, now) {
   return mapTour(doc, tourId, (t) => ({ ...t, photos: mark(t.photos), attachments: mark(t.attachments) }));
 }
 
+/** Foto liken ("gefällt mir", für das Fotobuch) oder das Like zurücknehmen. */
+export function setLiked(doc, tourId, fileId, liked, now) {
+  return mapTour(doc, tourId, (t) => ({
+    ...t,
+    photos: t.photos.map((p) => (p.id === fileId && p.deleted == null ? { ...p, liked: { value: liked, changed: now } } : p)),
+  }));
+}
+
+export function isLiked(photo) {
+  return photo.liked?.value === true && photo.deleted == null;
+}
+
 /** Ordner der Tour auf OneDrive merken (mit Zeit, damit der Abgleich ihn auf die anderen Geräte bringt). */
 export function setFolder(doc, tourId, path, folderId, now) {
   return mapTour(doc, tourId, (t) =>

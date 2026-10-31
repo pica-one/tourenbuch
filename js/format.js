@@ -64,6 +64,7 @@ function encodeFile(f) {
     oneDrivePath: f.oneDrivePath ?? null,
     added: f.added,
     deleted: null,
+    ...(f.liked ? { liked: stamped(f.liked) } : {}),
   };
 }
 
@@ -152,6 +153,7 @@ function decodeFile(f) {
   const itemId = str(f.oneDriveItemId);
   if (deleted == null && itemId == null) return null; // nur Dateien, die auf OneDrive liegen
   const kind = ATTACHMENT_KINDS.includes(f.kind) ? f.kind : null;
+  const liked = obj(f.liked);
   return {
     id,
     fileName: str(f.fileName) ?? '',
@@ -160,6 +162,8 @@ function decodeFile(f) {
     added: num(f.added),
     deleted,
     ...(kind ? { kind } : {}),
+    // "gefällt mir" (für das Fotobuch), mit Änderungszeit wie ein Tour-Feld
+    ...(liked && deleted == null ? { liked: { value: liked.value === true, changed: num(liked.changed) } } : {}),
   };
 }
 

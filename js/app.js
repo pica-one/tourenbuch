@@ -7,6 +7,7 @@ import { icon, typeBadge, typeLabel, TYPE_NAMES } from './icons.js';
 import { AuthError, BusyError, createOneDrive } from './onedrive.js';
 import * as store from './store.js';
 import { createSync } from './sync.js';
+import { renderPhotobook } from './photobook.js';
 import { renderStats } from './stats.js';
 import { renderTour as renderTourScreen, updateUploadStatus } from './tour.js';
 import { cleanRoot, storageSettings } from './naming.js';
@@ -179,10 +180,15 @@ function renderScreen(route) {
     renderStats(root, book, statsState);
     return bindActions();
   }
+  if (screen === 'fotobuch') {
+    renderPhotobook(root, { book, drive, demo: state.demo }, photobookState);
+    return bindActions();
+  }
   return renderList();
 }
 
 const statsState = { year: null };
+const photobookState = {};
 
 let editOpenFor = null;
 

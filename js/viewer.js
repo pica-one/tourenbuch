@@ -2,15 +2,16 @@
 // Original herunterladen, teilen. Die Bilder kommen in guter Qualität (2048 px) von OneDrive.
 
 import { icon } from './icons.js';
-import { isImageName, isVideoName } from './tourbook.js';
+import { isImageName, isLiked, isVideoName } from './tourbook.js';
 import { esc, showToast } from './ui.js';
 
 /**
  * photos: [{ id, fileName, oneDriveItemId }], start: Index
  * drive: OneDrive-Zugriff; thumbs: Map itemId -> { thumb, large } (schon geladene Vorschaubilder)
  * onRemove(photo): optional, "Aus Tour entfernen"
+ * onLike(photo, liked): optional, Herz "gefällt mir" (für das Fotobuch)
  */
-export function openViewer({ photos, start, drive, thumbs, onRemove }) {
+export function openViewer({ photos, start, drive, thumbs, onRemove, onLike }) {
   let index = start;
   let zoom = false;
   const bigUrls = new Map();
@@ -34,6 +35,7 @@ export function openViewer({ photos, start, drive, thumbs, onRemove }) {
       <div class="viewer-bar">
         <button class="iconbtn" data-v="close" aria-label="Schliessen">${icon('close')}</button>
         <span class="viewer-title">${esc(p.fileName)}<small>${index + 1} / ${photos.length}${video ? ' · Video' : ''}</small></span>
+        ${onLike && !doc ? `<button class="iconbtn like${isLiked(p) ? ' on' : ''}" data-v="like" aria-pressed="${isLiked(p)}" aria-label="Gefällt mir">${isLiked(p) ? '♥' : '♡'}</button>` : ''}
         ${canShare && !video && !doc ? `<button class="iconbtn" data-v="share" aria-label="Teilen">${icon('share')}</button>` : ''}
         <button class="iconbtn" data-v="download" aria-label="Original herunterladen">${icon('download')}</button>
         ${onRemove ? `<button class="iconbtn" data-v="remove" aria-label="Aus Tour entfernen">${icon('delete')}</button>` : ''}
@@ -123,6 +125,13 @@ export function openViewer({ photos, start, drive, thumbs, onRemove }) {
         showToast(e.message);
       }
     } else if (a === 'share') share(p);
+    else if (a === 'like') {
+      const liked = !isLiked(p);
+      // sofort anzeigen, gespeichert und abgeglichen wird im Hintergrund
+      photos[index] = { ...p, liked: { value: liked, changed: Date.now() } };
+      draw();
+      await onLike(p, liked);
+    }
     else if (a === 'remove') {
       if (!confirm(`„${p.fileName}“ aus dieser Tour entfernen? Auf OneDrive bleibt das Foto erhalten.`)) return;
       await onRemove(p);

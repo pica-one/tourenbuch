@@ -1,7 +1,7 @@
 // Bildschirm einer Tour: Angaben, Details, Fotos (Raster + Betrachter), Topo, GPX – Reihenfolge wie in der App.
 
 import { icon, typeBadge, typeLabel } from './icons.js';
-import { isMediaItem, isVideoName, reconcileFolder, reconcileText, removeFile } from './tourbook.js';
+import { isLiked, isMediaItem, isVideoName, reconcileFolder, reconcileText, removeFile, setLiked } from './tourbook.js';
 import { dateRange, dayCount, esc, mediaCount, showToast, stars, topbar } from './ui.js';
 import { openViewer } from './viewer.js';
 
@@ -60,7 +60,8 @@ export function renderTour(root, id, ctx) {
         ? `<div class="grid">${photos
             .map((p, i) => {
               const video = isVideoName(p.fileName);
-              return `<button class="cell${video ? ' video' : ''}" data-photo="${i}" aria-label="${esc(p.fileName)}${video ? ' (Video)' : ''}"><img data-item="${esc(p.oneDriveItemId)}" alt="" loading="lazy">${video ? '<span class="play" aria-hidden="true">▶</span>' : ''}</button>`;
+              const liked = isLiked(p);
+              return `<button class="cell${video ? ' video' : ''}" data-photo="${i}" aria-label="${esc(p.fileName)}${video ? ' (Video)' : ''}${liked ? ' (gefällt mir)' : ''}"><img data-item="${esc(p.oneDriveItemId)}" alt="" loading="lazy">${video ? '<span class="play" aria-hidden="true">▶</span>' : ''}${liked ? '<span class="heart" aria-hidden="true">♥</span>' : ''}</button>`;
             })
             .join('')}</div>`
         : '<div class="panel muted">Keine Fotos</div>'}
@@ -103,6 +104,11 @@ export function renderTour(root, id, ctx) {
               await ctx.book.update((doc) => removeFile(doc, t.id, p.id, Date.now()));
               ctx.afterChange();
             },
+        // Herz "gefällt mir" für das Fotobuch
+        onLike: async (p, liked) => {
+          await ctx.book.update((doc) => setLiked(doc, t.id, p.id, liked, Date.now()));
+          ctx.afterChange();
+        },
       });
   });
 
