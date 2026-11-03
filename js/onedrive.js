@@ -190,6 +190,16 @@ export function createOneDrive(getToken, fetchFn = (...a) => fetch(...a)) {
       }
     },
 
+    /** Original direkt über Graph (mit Anmeldung) – falls die vorab berechtigte Adresse nicht geht. */
+    async contentBlob(itemId) {
+      return (await call(`${BASE}/me/drive/items/${encodeURIComponent(itemId)}/content`)).blob();
+    },
+
+    /** Vorschaubild in der gewünschten Grösse direkt über Graph (mit Anmeldung). */
+    async thumbnailBlob(itemId, size) {
+      return (await call(`${BASE}/me/drive/items/${encodeURIComponent(itemId)}/thumbnails/0/${size}/content`)).blob();
+    },
+
     /** Adresse zum Herunterladen in Originalqualität oder null. */
     async downloadUrl(itemId) {
       try {

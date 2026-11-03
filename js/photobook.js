@@ -187,39 +187,66 @@ function loadJsPdf() {
 const RETRY_WAITS_MS = [1000, 3000, 8000];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Datei von einer vorab berechtigten Adresse laden; null = auf OneDrive nicht (mehr) vorhanden. */
 async function fetchBlob(url) {
-  const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+  if (!url) return null;
+  let res;
+  try {
+    res = await fetch(url, { cache: 'no-store' });
+  } catch (e) {
+    throw new Error(`${new URL(url).host}: ${e.message}`);
+  }
+  if (!res.ok) throw Object.assign(new Error(`${new URL(url).host}: HTTP ${res.status}`), { status: res.status });
   return res.blob();
 }
 
+/** Bild lesen; null = Format kann der Browser nicht lesen (z. B. HEIC vom iPhone). */
+async function decode(blob, original) {
+  try {
+    return await createImageBitmap(blob, original ? { imageOrientation: 'from-image' } : undefined);
+  } catch {
+    return null;
+  }
+}
+
+const SIZE = 'c2048x2048';
+
 /**
- * Foto laden -> ImageBitmap, oder null wenn es nicht geht. Standard: 2048-Pixel-Version von OneDrive;
- * hoch: das Original (kann der Browser es nicht lesen, z. B. HEIC vom iPhone, dann doch die 2048-Pixel-Version).
- * Bei Netzfehlern ("Failed to fetch") mehrmals versuchen, jedes Mal mit frischer Adresse.
+ * Foto laden -> ImageBitmap, oder null wenn es nicht geht (Grund in problems).
+ * Standard: 2048-Pixel-Version; hoch: das Original (nicht lesbar, z. B. HEIC -> doch die 2048-Pixel-Version).
+ * Jede Version zuerst über die vorab berechtigte Adresse, sonst direkt über Graph mit Anmeldung.
+ * Klappt keiner der Wege (z. B. "Failed to fetch"), nach einer Pause nochmals versuchen.
  */
-async function loadPhoto(drive, photo, wait, quality) {
-  let useOriginal = quality.original;
+async function loadPhoto(drive, photo, wait, quality, problems) {
+  const id = photo.oneDriveItemId;
+  const original = [
+    async () => fetchBlob(await drive.downloadUrl(id)),
+    drive.contentBlob && (() => drive.contentBlob(id)),
+  ];
+  const preview = [
+    async () => fetchBlob(await drive.thumbnailUrl(id, SIZE)),
+    drive.thumbnailBlob && (() => drive.thumbnailBlob(id, SIZE)),
+  ];
+  // Standard: wenn die Vorschau nicht geht, notfalls das Original
+  const ways = (quality.original ? [...original.map((w) => [w, true]), ...preview.map((w) => [w, false])]
+    : [...preview.map((w) => [w, false]), [original[1], true]]).filter(([w]) => w);
   for (let attempt = 0; ; attempt++) {
-    try {
-      if (useOriginal) {
-        const url = await drive.downloadUrl(photo.oneDriveItemId);
-        if (!url) return null; // auf OneDrive nicht mehr vorhanden
-        const blob = await fetchBlob(url);
-        try {
-          return await createImageBitmap(blob, { imageOrientation: 'from-image' });
-        } catch {
-          useOriginal = false; // Format kann der Browser nicht lesen
-        }
+    let lastError = null;
+    for (const [way, isOriginal] of ways) {
+      try {
+        const blob = await way();
+        if (!blob) return null; // auf OneDrive nicht mehr vorhanden
+        const bitmap = await decode(blob, isOriginal);
+        if (bitmap) return bitmap;
+      } catch (e) {
+        if (e?.status === 404) return null;
+        lastError = e;
       }
-      const url = await drive.thumbnailUrl(photo.oneDriveItemId, 'c2048x2048');
-      if (!url) return null;
-      return await createImageBitmap(await fetchBlob(url));
-    } catch (e) {
-      if (e?.status === 401) throw e; // abgemeldet: nicht weiter versuchen
-      if (e?.status === 404) return null;
     }
-    if (attempt >= RETRY_WAITS_MS.length) return null;
+    if (attempt >= RETRY_WAITS_MS.length) {
+      problems.push(lastError?.message || 'Format nicht lesbar');
+      return null;
+    }
     await wait(RETRY_WAITS_MS[attempt]);
   }
 }
@@ -277,13 +304,14 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
   const hasTitleFont = Boolean(font);
   const total = selection.reduce((n, x) => n + x.photos.length, 0);
   const missing = [];
+  const problems = [];
   let done = 0;
   let pages = 0;
   for (const { tour, photos } of selection) {
     for (const group of groupPhotos(photos)) {
       const items = [];
       for (const photo of group) {
-        const bitmap = await loadPhoto(drive, photo, wait, quality);
+        const bitmap = await loadPhoto(drive, photo, wait, quality, problems);
         if (bitmap) items.push({ bitmap, ratio: bitmap.width / bitmap.height });
         else {
           missing.push(photo.fileName);
@@ -310,8 +338,9 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
       });
     }
   }
-  if (!pages) throw new Error('Keines der Fotos konnte von OneDrive geladen werden. Bitte Internet prüfen und nochmals versuchen.');
-  return { blob: pdf.output('blob'), missing };
+  const reason = problems.length ? ` (Grund: ${problems[problems.length - 1]})` : '';
+  if (!pages) throw new Error(`Keines der Fotos konnte von OneDrive geladen werden${reason}. Bitte Internet prüfen und nochmals versuchen.`);
+  return { blob: pdf.output('blob'), missing, reason };
 }
 
 // ---------- Bildschirm ----------
@@ -373,7 +402,7 @@ export function renderPhotobook(root, ctx, state) {
     state.progress = [0, photoTotal];
     renderPhotobook(root, ctx, state);
     try {
-      const { blob, missing } = await createPhotobookPdf(ctx.drive, selection, (d, t) => {
+      const { blob, missing, reason } = await createPhotobookPdf(ctx.drive, selection, (d, t) => {
         state.progress = [d, t];
         const text = root.querySelector('.uploadtext');
         const bar = root.querySelector('.bar span');
@@ -389,13 +418,11 @@ export function renderPhotobook(root, ctx, state) {
       setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
       if (missing.length) {
         state.error = `PDF erstellt, aber ${missing.length} ${missing.length === 1 ? 'Foto konnte' : 'Fotos konnten'} nicht geladen werden `
-          + `und ${missing.length === 1 ? 'fehlt' : 'fehlen'}: ${missing.join(', ')}. Am besten nochmals erstellen.`;
+          + `und ${missing.length === 1 ? 'fehlt' : 'fehlen'}: ${missing.join(', ')}${reason}. Am besten nochmals erstellen.`;
       }
     } catch (e) {
       console.error(e);
-      state.error = e.status === 401 ? 'Bitte neu bei OneDrive anmelden und nochmals versuchen.'
-        : /fetch|network/i.test(e.message || '') ? 'Keine Verbindung zu OneDrive. Bitte Internet prüfen und nochmals versuchen.'
-        : e.message || 'Das PDF konnte nicht erstellt werden.';
+      state.error = e.message || 'Das PDF konnte nicht erstellt werden.';
     } finally {
       state.running = false;
       if (root.isConnected && location.hash.startsWith('#/fotobuch')) renderPhotobook(root, ctx, state);
