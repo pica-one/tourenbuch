@@ -368,15 +368,88 @@ export function layoutCells(ratios, random = Math.random, header = true) {
   return [0, 1, 2, 3].map((i) => ({ x: x0 + (i % 2) * (cw + gap), y: y0 + Math.floor(i / 2) * (ch + gap), w: cw, h: ch, fit: 'cover' }));
 }
 
-/** Für das grosse Feld bei 3 Fotos das "passendste" (Querformat) nach vorne nehmen. */
-function orderForLayout(items) {
-  if (items.length !== 3) return items;
-  // Ins grosse Feld das Querformat mit den meisten Bildpunkten (kleine, z. B. WhatsApp-Fotos, würden unscharf)
-  let i = -1;
-  items.forEach((x, k) => {
-    if (x.ratio >= 1 && (i < 0 || (x.bitmap?.width ?? 0) > (items[i].bitmap?.width ?? 0))) i = k;
+/** Alle Reihenfolgen von [0..n-1]. */
+function permutations(list) {
+  if (list.length <= 1) return [list];
+  return list.flatMap((x, i) => permutations([...list.slice(0, i), ...list.slice(i + 1)]).map((p) => [x, ...p]));
+}
+
+/** Alle Aufteilungen von n in Gruppen nacheinander, z. B. 3 -> [3], [1,2], [2,1], [1,1,1]. */
+function compositions(n) {
+  if (n === 0) return [[]];
+  const out = [];
+  for (let first = 1; first <= n; first++) for (const rest of compositions(n - first)) out.push([first, ...rest]);
+  return out;
+}
+
+/**
+ * Eine Anordnung ausrechnen. dir 'row': Blöcke nebeneinander, ein Block = ein Foto oder mehrere übereinander;
+ * dir 'col': Blöcke untereinander, ein Block = ein Foto oder mehrere nebeneinander. Alle Felder haben genau das
+ * Seitenverhältnis ihres Fotos (nichts wird abgeschnitten); das Ganze so gross wie möglich, in der Mitte der Fläche.
+ * Ergebnis: Felder je Foto-Nummer, oder null wenn es nicht aufgeht.
+ */
+function placeBlocks(dir, blocks, ratios, area, gap) {
+  const row = dir === 'row';
+  // Breite (row) bzw. Höhe (col) eines Blocks ist linear: a * Grösse + b
+  const lin = blocks.map((b) => {
+    if (b.length === 1) return row ? [ratios[b[0]], 0] : [1 / ratios[b[0]], 0];
+    const s = b.reduce((t, i) => t + (row ? 1 / ratios[i] : ratios[i]), 0);
+    return [1 / s, (-(b.length - 1) * gap) / s];
   });
-  return i > 0 ? [items[i], ...items.filter((_, k) => k !== i)] : items;
+  const A = lin.reduce((t, [a]) => t + a, 0);
+  const B = lin.reduce((t, [, b]) => t + b, 0) + (blocks.length - 1) * gap;
+  const along = row ? area.w : area.h; // Richtung, in der die Blöcke aufgereiht sind
+  const across = row ? area.h : area.w;
+  const size = Math.min(across, (along - B) / A); // Höhe der Reihe bzw. Breite der Spalte
+  if (!(size > 0)) return null;
+  const total = A * size + B;
+  const cells = [];
+  let pos = (row ? area.x : area.y) + (along - total) / 2;
+  const start = (row ? area.y : area.x) + (across - size) / 2;
+  for (let k = 0; k < blocks.length; k++) {
+    const len = lin[k][0] * size + lin[k][1];
+    if (!(len > 0)) return null;
+    let inner = start;
+    for (const i of blocks[k]) {
+      const part = blocks[k].length === 1 ? size : row ? len / ratios[i] : len * ratios[i];
+      cells[i] = row
+        ? { x: pos, y: inner, w: len, h: part }
+        : { x: inner, y: pos, w: part, h: len };
+      inner += part + gap;
+    }
+    pos += len + gap;
+  }
+  return cells;
+}
+
+/**
+ * Fotos ohne Abschneiden auf eine Fläche verteilen (2–4 Fotos): probiert alle Anordnungen (Reihen, Spalten,
+ * gestapelt) und Reihenfolgen und nimmt die, bei der die Fotos zusammen am meisten Fläche bekommen.
+ * ratios = Breite/Höhe; area = { x, y, w, h }. Ergebnis: Felder in der Reihenfolge der ratios.
+ */
+export function justifiedCells(ratios, area, gap = PAGE.gap) {
+  const n = ratios.length;
+  let best = null;
+  for (const perm of permutations([...Array(n).keys()])) {
+    for (const parts of compositions(n)) {
+      let k = 0;
+      const blocks = parts.map((p) => perm.slice(k, (k += p)));
+      for (const dir of ['row', 'col']) {
+        const cells = placeBlocks(dir, blocks, ratios, area, gap);
+        if (!cells) continue;
+        const score = cells.reduce((t, c) => t + c.w * c.h, 0);
+        if (!best || score > best.score + 1e-6) best = { score, cells };
+      }
+    }
+  }
+  return best.cells.map((c) => ({ ...c, fit: 'cover' }));
+}
+
+/** Fläche für die Fotos einer Seite (ohne Beschnitt), mit oder ohne Titelzeile. */
+function photoArea(header) {
+  const { w, h, margin } = PAGE;
+  const captionH = header ? PAGE.captionH : 0;
+  return { x: margin, y: margin + captionH, w: w - 2 * margin, h: h - 2 * margin - captionH };
 }
 
 /** Einzelnes Foto: nicht grösser drucken, als es für 220 dpi Bildpunkte hat (Feld schrumpft, bleibt zentriert). */
@@ -506,8 +579,8 @@ function renderCell(bitmap, cell, quality) {
     sw = bitmap.height * (w / h); // Seiten abschneiden
     sx = (bitmap.width - sw) / 2;
   } else {
-    sh = bitmap.width / (w / h); // oben/unten abschneiden
-    sy = (bitmap.height - sh) / 2;
+    sh = bitmap.width / (w / h); // oben/unten abschneiden – mehr unten als oben (Köpfe sind meist oben)
+    sy = (bitmap.height - sh) * 0.3;
   }
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.min(Math.round(w * quality.pxPerMm), Math.round(sw)));
@@ -638,9 +711,12 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
         continue;
       }
       drawPage(pdf, tour, theme, pages, header);
-      const ordered = orderForLayout(items);
-      const cells = layoutCells(ordered.map((i) => i.ratio), random, header);
+      const ordered = items;
       const f = theme.frame ? FRAME_MM : 0;
+      // Felder in der Form der Fotos – nichts wird abgeschnitten (der weisse Rand kommt aussen dazu)
+      const area = photoArea(header);
+      const cells = justifiedCells(ordered.map((i) => i.ratio), { x: area.x + f, y: area.y + f, w: area.w - 2 * f, h: area.h - 2 * f }, PAGE.gap + 2 * f)
+        .map((c) => ({ ...c, x: c.x - f, y: c.y - f, w: c.w + 2 * f, h: c.h + 2 * f }));
       const b = BOOK.bleed;
       ordered.forEach((item, i) => {
         const c = limitToDpi(cells[i], item.bitmap);
@@ -760,15 +836,10 @@ export async function createCoverPdf(drive, { front, back = [], title = '', spin
     const W = panelW - 68;
     const H = h - 68 - 14; // unten etwas mehr Luft
     const gap = 5;
-    const n = items.length;
-    const cells = n === 4
-      ? [0, 1, 2, 3].map((i) => ({ x: bx + (i % 2) * ((W + gap) / 2), y: by + Math.floor(i / 2) * ((H + gap) / 2), w: (W - gap) / 2, h: (H - gap) / 2 }))
-      : Array.from({ length: n }, (_, i) => {
-        // nebeneinander, Höhe aus dem Durchschnitt der Seitenverhältnisse, nicht höher als H
-        const cw = (W - (n - 1) * gap) / n;
-        const ch = Math.min(H, n === 1 ? H : cw / 0.8);
-        return { x: bx + i * (cw + gap), y: by + (H - ch) / 2, w: cw, h: ch };
-      });
+    // Felder in der Form der Fotos – nichts wird abgeschnitten (Rand aussen dazu)
+    const f = theme.frame ? FRAME_MM : 0;
+    const cells = justifiedCells(items.map((it) => it.ratio), { x: bx + f, y: by + f, w: W - 2 * f, h: H - 2 * f }, gap + 2 * f)
+      .map((c) => ({ ...c, x: c.x - f, y: c.y - f, w: c.w + 2 * f, h: c.h + 2 * f }));
     items.forEach((it, i) => {
       const img = placePhoto(pdf, it, cells[i], theme, quality);
       if (img.dpi < BOOK.minDpi) lowRes.push({ fileName: it.fileName, dpi: img.dpi });
