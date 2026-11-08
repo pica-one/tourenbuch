@@ -101,6 +101,16 @@ export function setLiked(doc, tourId, fileId, liked, now) {
   }));
 }
 
+/** Alle Fotos einer Tour auf einmal liken / entliken (Videos nicht – die kommen nicht ins Fotobuch).
+ *  Nur Fotos, die sich ändern, bekommen eine neue Zeit. */
+export function setLikedAll(doc, tourId, liked, now) {
+  return mapTour(doc, tourId, (t) => ({
+    ...t,
+    photos: t.photos.map((p) => (p.deleted == null && !isVideoName(p.fileName) && isLiked(p) !== liked
+      ? { ...p, liked: { value: liked, changed: now } } : p)),
+  }));
+}
+
 export function isLiked(photo) {
   return photo.liked?.value === true && photo.deleted == null;
 }

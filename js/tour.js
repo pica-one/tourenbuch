@@ -1,7 +1,7 @@
 // Bildschirm einer Tour: Angaben, Details, Fotos (Raster + Betrachter), Topo, GPX – Reihenfolge wie in der App.
 
 import { icon, typeBadge, typeLabel } from './icons.js';
-import { isLiked, isMediaItem, isVideoName, reconcileFolder, reconcileText, removeFile, setLiked } from './tourbook.js';
+import { isLiked, isMediaItem, isVideoName, reconcileFolder, reconcileText, removeFile, setLiked, setLikedAll } from './tourbook.js';
 import { dateRange, dayCount, esc, mediaCount, showToast, stars, topbar } from './ui.js';
 import { openViewer } from './viewer.js';
 
@@ -26,6 +26,9 @@ export function renderTour(root, id, ctx) {
   const folder = t.oneDriveFolder?.value;
   const photos = t.photos.filter((p) => p.deleted == null);
   const videoCount = photos.filter((p) => isVideoName(p.fileName)).length;
+  const stills = photos.filter((p) => !isVideoName(p.fileName));
+  const likedCount = stills.filter(isLiked).length;
+  const allLiked = stills.length > 0 && likedCount === stills.length;
   const topos = t.attachments.filter((a) => a.deleted == null && a.kind === 'TOPO');
   const gpx = t.attachments.filter((a) => a.deleted == null && a.kind === 'GPX');
   const offline = ctx.demo;
@@ -55,6 +58,9 @@ export function renderTour(root, id, ctx) {
       <div class="sectionhead"><h2>${videoCount ? 'Fotos und Videos' : 'Fotos'}${photos.length ? ` <span class="muted">(${mediaCount(photos.length - videoCount, videoCount)})</span>` : ''}</h2>
         <button class="btn outline small" data-add="PHOTO" ${offline ? 'disabled' : ''}>${icon('add', 18)} Fotos/Videos</button></div>
       ${folder?.path && !offline ? `<button class="btn outline wide folderSync" data-folder-sync>${icon('sync', 18)} Mit OneDrive abgleichen</button>` : ''}
+      ${stills.length ? `<button class="btn outline wide likeAll" data-like-all="${allLiked ? 'off' : 'on'}">${allLiked
+        ? '♡ Bei allen Fotos das Herz entfernen'
+        : `♥ Alle Fotos liken${likedCount ? ` <span class="muted">(${likedCount} von ${stills.length} schon)</span>` : ''}`}</button>` : ''}
       <div id="uploadstatus"></div>
       ${photos.length
         ? `<div class="grid">${photos
@@ -88,6 +94,14 @@ export function renderTour(root, id, ctx) {
       await ctx.book.update((doc) => removeFile(doc, t.id, f.id, Date.now()));
       ctx.afterChange();
     };
+  });
+
+  // Alle Fotos auf einmal liken / Herzen entfernen (fürs Fotobuch)
+  root.querySelector('[data-like-all]')?.addEventListener('click', async (e) => {
+    const liked = e.currentTarget.dataset.likeAll === 'on';
+    if (!liked && !confirm(`Bei allen ${likedCount} Fotos dieser Tour das Herz entfernen?`)) return;
+    await ctx.book.update((doc) => setLikedAll(doc, t.id, liked, Date.now()));
+    ctx.afterChange();
   });
 
   // Fotos: Betrachter
