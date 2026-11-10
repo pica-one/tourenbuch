@@ -304,17 +304,17 @@ export function bookPageCount(pages, minPages) {
 }
 
 /**
- * Fotos einer Tour auf Seiten verteilen: locker gemischt 2–4 Fotos pro Seite (nur bei 1 Foto insgesamt eines).
- * random = Zufallszahl 0..1 (für Tests einstellbar). Ergebnis: Liste von Foto-Gruppen.
+ * Fotos ohne gewählte Seitengrösse ("automatisch") auf Seiten verteilen: zufällig 2 oder 3 pro Seite
+ * (nur bei 1 Foto insgesamt eines). random = Zufallszahl 0..1 (für Tests einstellbar). Ergebnis: Foto-Gruppen.
  */
 export function groupPhotos(photos, random = Math.random) {
-  // Einzelfotos gibt es nur, wenn sie ausdrücklich gewählt sind (eigene Seite) – hier immer 2–4
-  const sizes = [2, 2, 3, 3, 4, 4, 4];
+  // Einzelfotos und 4er/6er-Seiten gibt es nur, wenn sie ausdrücklich gewählt sind – hier 2er und 3er
+  const sizes = [2, 3];
   const groups = [];
   let rest = [...photos];
   while (rest.length) {
     let n = sizes[Math.floor(random() * sizes.length)];
-    if (rest.length - n === 1) n = n === 4 ? 3 : n + 1; // kein einzelnes Foto allein übrig lassen
+    if (rest.length - n === 1) n = n === 3 ? 2 : 3; // kein einzelnes Foto allein übrig lassen
     n = Math.min(n, rest.length);
     groups.push(rest.slice(0, n));
     rest = rest.slice(n);
@@ -424,7 +424,8 @@ function placeBlocks(dir, blocks, ratios, area, gap) {
 
 /**
  * Fotos ohne Abschneiden auf eine Fläche verteilen (2–4 Fotos): probiert alle Anordnungen (Reihen, Spalten,
- * gestapelt) und Reihenfolgen und nimmt die, bei der die Fotos zusammen am meisten Fläche bekommen.
+ * gestapelt) und Reihenfolgen und nimmt die, bei der die Fotos zusammen am meisten Fläche bekommen
+ * (ab 4 Fotos zählt zusätzlich, dass alle etwa gleich gross sind).
  * ratios = Breite/Höhe; area = { x, y, w, h }. Ergebnis: Felder in der Reihenfolge der ratios.
  */
 export function justifiedCells(ratios, area, gap = PAGE.gap) {
@@ -437,12 +438,55 @@ export function justifiedCells(ratios, area, gap = PAGE.gap) {
       for (const dir of ['row', 'col']) {
         const cells = placeBlocks(dir, blocks, ratios, area, gap);
         if (!cells) continue;
-        const score = cells.reduce((t, c) => t + c.w * c.h, 0);
+        const areas = cells.map((c) => c.w * c.h);
+        let score = areas.reduce((t, a) => t + a, 0);
+        // Ab 4 Fotos: alle etwa gleich gross (nicht eines gross und die anderen klein)
+        if (n >= 4) score *= Math.min(...areas) / Math.max(...areas);
         if (!best || score > best.score + 1e-6) best = { score, cells };
       }
     }
   }
   return best.cells.map((c) => ({ ...c, fit: 'cover' }));
+}
+
+/** Seitengrössen, die man pro Foto wählen kann: 1 = Einzelfoto (randlos), sonst Fotos pro Seite. */
+export const PAGE_SIZES = [1, 2, 3, 4, 6];
+
+/**
+ * Seiten einer Tour planen. sizeOf(foto) = gewählte Seitengrösse (0 = automatisch).
+ * Ergebnis: [{ g: Fotos, single?: true, slots: Plätze (0 = automatisch) }], nach Aufnahmezeit;
+ * die erste Seite hat mehrere Fotos (dort steht der Titel), sofern es eine solche gibt.
+ */
+export function planTourPages(photos, sizeOf, random = Math.random) {
+  const plan = groupPhotos(photos.filter((p) => !sizeOf(p)), random).map((g) => ({ g, slots: 0 }));
+  for (const s of PAGE_SIZES) {
+    const list = photos.filter((p) => sizeOf(p) === s);
+    if (s === 1) list.forEach((p) => plan.push({ g: [p], single: true, slots: 1 }));
+    else for (let i = 0; i < list.length; i += s) plan.push({ g: list.slice(i, i + s), slots: s });
+  }
+  plan.sort((a, b) => photos.indexOf(a.g[0]) - photos.indexOf(b.g[0]));
+  const firstGroup = plan.findIndex((x) => !x.single);
+  if (firstGroup > 0) plan.unshift(plan.splice(firstGroup, 1)[0]);
+  return plan;
+}
+
+/**
+ * Felder für die Fotos einer Seite mit `slots` Plätzen. Sind weniger Fotos da (unvollständige 4er-Seite …),
+ * bekommen sie die Grösse wie auf der vollen Seite (Platzhalter in der Durchschnittsform), und die Gruppe
+ * wird in die Mitte gerückt.
+ */
+export function pageCells(ratios, slots, area, gap = PAGE.gap) {
+  const n = ratios.length;
+  if (slots <= n) return justifiedCells(ratios, area, gap);
+  const avg = ratios.reduce((t, r) => t + r, 0) / n;
+  const cells = justifiedCells([...ratios, ...Array(slots - n).fill(avg)], area, gap).slice(0, n);
+  const x0 = Math.min(...cells.map((c) => c.x));
+  const y0 = Math.min(...cells.map((c) => c.y));
+  const x1 = Math.max(...cells.map((c) => c.x + c.w));
+  const y1 = Math.max(...cells.map((c) => c.y + c.h));
+  const dx = area.x + (area.w - (x1 - x0)) / 2 - x0;
+  const dy = area.y + (area.h - (y1 - y0)) / 2 - y0;
+  return cells.map((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
 }
 
 /** Fläche für die Fotos einer Seite (ohne Beschnitt), mit oder ohne Titelzeile. */
@@ -608,7 +652,7 @@ function renderCell(bitmap, cell, quality) {
  * Die Fotos werden der Reihe nach geladen, damit auch grosse Bücher wenig Speicher brauchen.
  */
 export async function createPhotobookPdf(drive, selection, onProgress = () => {},
-  { wait = sleep, quality = QUALITY.high, theme = THEMES.creme, minPages = BOOK.minPages, intro = true, overview = true, title, from, to, random = Math.random, singles = new Set() } = {}) {
+  { wait = sleep, quality = QUALITY.high, theme = THEMES.creme, minPages = BOOK.minPages, intro = true, overview = true, title, from, to, random = Math.random, singles = new Set(), sizes = new Map() } = {}) {
   // Seite mit Beschnitt: 303 × 216 mm
   const format = [PAGE.w + 2 * BOOK.bleed, PAGE.h + 2 * BOOK.bleed];
   // putOnlyUsedFonts (in newPdf): sonst stehen die 14 Standardschriften (nicht eingebettet) im PDF und die Druckerei meckert
@@ -628,16 +672,10 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
   const fullW = ((PAGE.w - 2 * PAGE.margin) / 25.4) * BOOK.minDpi;
   const needsPartner = (it) => it.ratio < 1 || (quality.original && it.bitmap.width < 0.9 * fullW);
   for (const { tour, photos } of selection) {
-    // Seitenplan: gewählte Einzelfotos je auf eine ganze Seite, die übrigen in Gruppen zu 2–4;
-    // in Aufnahme-Reihenfolge, aber die Tour beginnt mit einer Gruppenseite (dort steht der Titel)
-    const isSingle = (p) => singles.has(p.oneDriveItemId);
-    const plan = [
-      ...groupPhotos(photos.filter((p) => !isSingle(p)), random).map((g) => ({ single: false, g })),
-      ...photos.filter(isSingle).map((p) => ({ single: true, g: [p] })),
-    ];
-    plan.sort((a, b) => photos.indexOf(a.g[0]) - photos.indexOf(b.g[0]));
-    const firstGroup = plan.findIndex((x) => !x.single);
-    if (firstGroup > 0) plan.unshift(plan.splice(firstGroup, 1)[0]);
+    // Seitenplan: gewählte Einzelfotos je auf eine ganze Seite; Fotos mit gewählter Seitengrösse (2er/3er/4er/6er)
+    // der Reihe nach auf Seiten dieser Grösse (die letzte darf unvollständig sein); die übrigen automatisch zu 2–3.
+    // In Aufnahme-Reihenfolge, aber die Tour beginnt mit einer Seite mit mehreren Fotos (dort steht der Titel).
+    const plan = planTourPages(photos, (p) => sizes.get(p.oneDriveItemId) ?? (singles.has(p.oneDriveItemId) ? 1 : 0), random);
     let firstPage = null;
     const early = new Map(); // schon geladene Fotos (Blick voraus aufs letzte Foto)
     const fetchItem = async (photo) => {
@@ -666,7 +704,9 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
         onProgress(++done, total);
         continue;
       }
-      const later = plan.slice(pi + 1).filter((x) => !x.single).map((x) => x.g); // weitere Gruppen dieser Tour
+      const fixed = plan[pi].slots > 0; // Seitengrösse gewählt: so lassen, wie gewählt
+      // weitere automatische Gruppen dieser Tour (nur zwischen denen wird ausgeglichen)
+      const later = fixed ? [] : plan.slice(pi + 1).filter((x) => !x.single && !x.slots).map((x) => x.g);
       const items = [];
       const load = async (photo) => {
         const item = await fetchItem(photo);
@@ -674,7 +714,7 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
       };
       for (const photo of plan[pi].g) await load(photo);
       // Ein Hochformat (oder ein zu kleines Foto, z. B. von WhatsApp) nie allein auf eine Seite: das nächste Foto dazunehmen
-      while (items.length === 1 && needsPartner(items[0])) {
+      while (!fixed && items.length === 1 && needsPartner(items[0])) {
         const next = later.find((g) => g.length);
         if (!next) break;
         await load(next.shift());
@@ -682,7 +722,7 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
       // Bliebe danach nur noch ein Hochformat übrig, kommt es schon auf diese Seite
       const rest = later.flat();
       // (ist diese Seite schon voll, wandert eines ihrer Fotos zu ihm auf die nächste)
-      if (rest.length === 1 && items.length) {
+      if (!fixed && rest.length === 1 && items.length) {
         const item = await fetchItem(rest[0]);
         const g = later.find((x) => x.length);
         if (!item) g.shift();
@@ -702,8 +742,9 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
       if (pages++) pdf.addPage(format, 'landscape');
       const header = firstPage == null; // Titel nur auf der ersten Seite der Tour
       firstPage ??= pages;
-      if (items.length === 1) {
-        // Nur ein Foto übrig (z. B. Tour mit einem einzigen Foto): Foto + Titel daneben, kein Einzelfoto
+      const onlyPage = plan.filter((x) => !x.single).length === 1;
+      if (items.length === 1 && !fixed && onlyPage) {
+        // Tour mit nur einem Foto: Foto + Titel daneben, kein Einzelfoto
         const img = drawPortraitSolo(pdf, tour, theme, pages, items[0], quality);
         if (img.dpi < BOOK.minDpi) lowRes.push({ fileName: items[0].fileName, dpi: img.dpi, page: pages, tour: tour.mountain.value });
         items[0].bitmap.close?.();
@@ -715,7 +756,9 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
       const f = theme.frame ? FRAME_MM : 0;
       // Felder in der Form der Fotos – nichts wird abgeschnitten (der weisse Rand kommt aussen dazu)
       const area = photoArea(header);
-      const cells = justifiedCells(ordered.map((i) => i.ratio), { x: area.x + f, y: area.y + f, w: area.w - 2 * f, h: area.h - 2 * f }, PAGE.gap + 2 * f)
+      // Unvollständige Seite (z. B. 4er-Seite mit erst 1 Foto): Fotos so gross wie auf der vollen Seite, Rest bleibt frei
+      const slots = Math.max(plan[pi].slots || 2, items.length);
+      const cells = pageCells(ordered.map((i) => i.ratio), slots, { x: area.x + f, y: area.y + f, w: area.w - 2 * f, h: area.h - 2 * f }, PAGE.gap + 2 * f)
         .map((c) => ({ ...c, x: c.x - f, y: c.y - f, w: c.w + 2 * f, h: c.h + 2 * f }));
       const b = BOOK.bleed;
       ordered.forEach((item, i) => {
@@ -895,7 +938,16 @@ async function loadThumbs(root, drive) {
     while (next < todo.length) {
       const img = todo[next++];
       try {
-        const url = await drive.thumbnailUrl(img.dataset.thumb, 'c300x300');
+        // Über die Anmeldung laden (die vorab berechtigten Adressen lehnt OneDrive teils mit 401 ab)
+        let url = null;
+        if (drive.thumbnailBlob) {
+          try {
+            url = URL.createObjectURL(await drive.thumbnailBlob(img.dataset.thumb, 'c300x300'));
+          } catch {
+            url = null;
+          }
+        }
+        url ??= await drive.thumbnailUrl(img.dataset.thumb, 'c300x300');
         if (url) {
           thumbs.set(img.dataset.thumb, url);
           root.querySelectorAll(`img[data-thumb="${CSS.escape(img.dataset.thumb)}"]`).forEach((x) => (x.src = url));
@@ -908,13 +960,42 @@ async function loadThumbs(root, drive) {
   await Promise.all([worker(), worker(), worker(), worker()]);
 }
 
+// Farben und Namen der Seitengrössen (0 = automatisch)
+const SIZE_COLORS = { 0: '#888888', 1: '#2e5e4e', 2: '#2b6cb0', 3: '#7b4fa0', 4: '#c05621', 6: '#8a5a2b' };
+const sizeLabel = (s) => (s === 0 ? 'Automatisch' : s === 1 ? 'Einzelfoto' : `${s}er-Seite`);
+
+/** Stand pro Seitengrösse einer Tour: { size, count, pages, open (freie Plätze auf der letzten Seite) }; size 0 = automatisch. */
+export function sizeStatus(photos, sizes) {
+  const out = [];
+  for (const s of [...PAGE_SIZES, 0]) {
+    const count = photos.filter((p) => (sizes.get(p.oneDriveItemId) ?? 0) === s).length;
+    if (!count) continue;
+    const pages = s === 0 ? 0 : s === 1 ? count : Math.ceil(count / s);
+    out.push({ size: s, count, pages, open: s > 1 ? pages * s - count : 0 });
+  }
+  return out;
+}
+
+function statusText(s) {
+  if (s.size === 0) return `<span class="muted">Automatisch (2er/3er): ${s.count} ${s.count === 1 ? 'Foto' : 'Fotos'}</span>`;
+  const dot = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${SIZE_COLORS[s.size]}"></span>`;
+  if (s.size === 1) return `${dot} Einzelfotos: ${s.count} → ${s.count} ${s.count === 1 ? 'Seite' : 'Seiten'} ✓`;
+  const pagesText = `${s.pages} ${s.pages === 1 ? 'Seite' : 'Seiten'}`;
+  return `${dot} ${s.size}er: ${s.count} ${s.count === 1 ? 'Foto' : 'Fotos'} → ${pagesText} `
+    + (s.open ? `<span style="color:#c05621">⚠ letzte Seite erst ${s.size - s.open} von ${s.size} – noch ${s.open} frei</span>` : '✓ voll');
+}
+
 // Auswahl fürs Buch im Browser merken (nur auf diesem Gerät), damit sie nach dem Neuladen noch da ist
 const CHOICES_KEY = 'tourenbuch-fotobuch';
 function loadChoices(state) {
   try {
     const c = JSON.parse(localStorage.getItem(CHOICES_KEY) || '{}');
     if (Array.isArray(c.excluded)) state.excluded = new Set(c.excluded);
-    if (Array.isArray(c.singles)) state.singles = new Set(c.singles);
+    state.sizes = new Map();
+    if (Array.isArray(c.singles)) c.singles.forEach((id) => state.sizes.set(id, 1)); // frühere Version: nur Einzelfotos
+    if (c.sizes && typeof c.sizes === 'object') {
+      for (const [id, s] of Object.entries(c.sizes)) if (PAGE_SIZES.includes(s)) state.sizes.set(id, s);
+    }
     if (typeof c.title === 'string') state.title = c.title;
     if (typeof c.overview === 'boolean') state.overview = c.overview;
     if (typeof c.theme === 'string' && THEMES[c.theme]) state.theme = c.theme;
@@ -928,7 +1009,7 @@ function loadChoices(state) {
 function saveChoices(state) {
   try {
     localStorage.setItem(CHOICES_KEY, JSON.stringify({
-      excluded: [...(state.excluded ?? [])], singles: [...(state.singles ?? [])], title: state.title, overview: state.overview,
+      excluded: [...(state.excluded ?? [])], sizes: Object.fromEntries(state.sizes ?? []), title: state.title, overview: state.overview,
       theme: state.theme, spine: state.spine, coverFront: state.coverFront, coverBack: state.coverBack,
     }));
   } catch {
@@ -950,7 +1031,8 @@ export function renderPhotobook(root, ctx, state) {
   state.to ??= `${year}-12-31`;
   state.quality ??= 'high';
   state.excluded ??= new Set();
-  state.singles ??= new Set();
+  state.sizes ??= new Map();
+  state.sizeTool ??= 1;
   state.open ??= new Set();
   state.coverOpen ??= new Set();
   state.overview ??= true;
@@ -984,25 +1066,40 @@ export function renderPhotobook(root, ctx, state) {
       </div>
       <p><strong>${chosen.length} ${chosen.length === 1 ? 'Tour' : 'Touren'} · ${photoTotal} ${photoTotal === 1 ? 'Foto' : 'Fotos'} mit ♥</strong>
         ${selection.length > chosen.length ? `<span class="muted">(${selection.length - chosen.length} abgewählt)</span>` : ''}</p>
-      ${selection.length ? `<p class="muted" style="font-size:.85rem;margin:4px 0">Haken = Tour kommt ins Buch. ▸ aufklappen und
-        Fotos antippen, die als <strong>Einzelfoto</strong> randlos eine ganze Seite bekommen sollen (am besten Querformat –
-        Hochformat wird stark beschnitten). Alle anderen kommen zu 2–4 auf eine Seite.</p>
+      ${selection.length ? `<p class="muted" style="font-size:.85rem;margin:4px 0">Haken = Tour kommt ins Buch. ▸ aufklappen, unten
+        die Seitengrösse wählen und Fotos antippen (nochmals antippen = wieder automatisch). <strong>Einzelfoto</strong> = randlos
+        eine ganze Seite (am besten Querformat). Fotos ohne Wahl kommen automatisch zu 2 oder 3 auf eine Seite.</p>
+        <div style="position:sticky;top:56px;z-index:4;background:var(--surface);padding:6px 0;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <span class="muted" style="font-size:.85rem">Antippen setzt:</span>
+          ${[...PAGE_SIZES, 0].map((s) => `<button type="button" class="pbTool" data-size="${s}" ${dis}
+            style="padding:4px 10px;border-radius:14px;cursor:pointer;font-size:.85rem;border:2px solid ${SIZE_COLORS[s]};
+            background:${state.sizeTool === s ? SIZE_COLORS[s] : 'transparent'};color:${state.sizeTool === s ? '#fff' : 'inherit'}">${sizeLabel(s)}</button>`).join('')}
+        </div>
         <div>${selection.map((x) => {
-          const nSingle = x.photos.filter((p) => state.singles.has(p.oneDriveItemId)).length;
+          const st = sizeStatus(x.photos, state.sizes);
+          const warn = st.some((s) => s.open);
           return `<details class="pbTourBox" data-id="${esc(x.tour.id)}" ${state.open.has(x.tour.id) ? 'open' : ''} style="margin:2px 0">
           <summary style="${plain};cursor:pointer;align-items:center">
             <span class="pbArrow" style="display:inline-block;width:12px;color:#888">▸</span>
             <input type="checkbox" class="pbTour" data-id="${esc(x.tour.id)}" ${state.excluded.has(x.tour.id) ? '' : 'checked'} ${dis}>
-            <span>${esc(captionOf(x.tour))} <span class="muted">(${x.photos.length}${nSingle ? ` · ${nSingle} einzeln` : ''})</span></span></summary>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px;margin:6px 0 10px 40px">
+            <span>${esc(captionOf(x.tour))} <span class="muted">(${x.photos.length})</span>
+              ${st.filter((s) => s.size).map((s) => `<span style="font-size:.75rem;padding:0 5px;border-radius:4px;color:#fff;background:${SIZE_COLORS[s.size]}">${s.size === 1 ? `${s.count} einzeln` : `${s.size}er ${s.count}/${s.pages * s.size}`}</span>`).join(' ')}
+              ${warn ? '<span title="Eine Seite ist noch nicht voll" style="color:#c05621">⚠</span>' : ''}</span></summary>
+          <div style="margin:6px 0 10px 40px">
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px">
             ${x.photos.map((p) => {
-              const on = state.singles.has(p.oneDriveItemId);
-              return `<button type="button" class="pbSingle" data-id="${esc(p.oneDriveItemId)}" title="${esc(p.fileName)}" ${dis}
-                style="position:relative;padding:0;border:3px solid ${on ? '#2e5e4e' : 'transparent'};border-radius:6px;overflow:hidden;aspect-ratio:1;background:#8883;cursor:pointer">
+              const s = state.sizes.get(p.oneDriveItemId) ?? 0;
+              const pageNo = s > 1 ? Math.floor(x.photos.filter((q) => state.sizes.get(q.oneDriveItemId) === s).indexOf(p) / s) + 1 : 0;
+              return `<button type="button" class="pbSize" data-id="${esc(p.oneDriveItemId)}" title="${esc(p.fileName)}" ${dis}
+                style="position:relative;padding:0;border:3px solid ${s ? SIZE_COLORS[s] : 'transparent'};border-radius:6px;overflow:hidden;aspect-ratio:1;background:#8883;cursor:pointer">
                 <img data-thumb="${esc(p.oneDriveItemId)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block">
-                ${on ? '<span style="position:absolute;left:4px;top:4px;background:#2e5e4e;color:#fff;font-size:.7rem;padding:1px 5px;border-radius:4px">Einzelfoto</span>' : ''}
+                ${s ? `<span style="position:absolute;left:4px;top:4px;background:${SIZE_COLORS[s]};color:#fff;font-size:.7rem;padding:1px 5px;border-radius:4px">${s === 1 ? 'Einzel' : `${s}er · S.${pageNo}`}</span>` : ''}
               </button>`;
             }).join('')}
+            </div>
+            <div style="font-size:.85rem;margin-top:6px;display:flex;flex-direction:column;gap:2px">
+              ${st.map((s) => `<div>${statusText(s)}</div>`).join('')}
+            </div>
           </div></details>`;
         }).join('')}</div>`
         : '<p class="muted">Keine Fotos mit ♥ in diesem Zeitraum. Like Fotos in der Grossansicht mit dem Herz.</p>'}
@@ -1097,10 +1194,15 @@ export function renderPhotobook(root, ctx, state) {
     if (d.open) set.add(d.dataset.id);
     else set.delete(d.dataset.id);
   }));
-  root.querySelectorAll('.pbSingle').forEach((b) => (b.onclick = () => {
+  root.querySelectorAll('.pbTool').forEach((b) => (b.onclick = () => {
+    state.sizeTool = Number(b.dataset.size);
+    rerender();
+  }));
+  root.querySelectorAll('.pbSize').forEach((b) => (b.onclick = () => {
     const id = b.dataset.id;
-    if (state.singles.has(id)) state.singles.delete(id);
-    else state.singles.add(id);
+    // gleiche Wahl nochmals = wieder automatisch
+    if (state.sizeTool === 0 || state.sizes.get(id) === state.sizeTool) state.sizes.delete(id);
+    else state.sizes.set(id, state.sizeTool);
     saveChoices(state);
     rerender();
   }));
@@ -1158,7 +1260,7 @@ export function renderPhotobook(root, ctx, state) {
         const bar = root.querySelector('.bar span');
         if (text) text.textContent = `Erstelle PDF … Foto ${d} von ${t}`;
         if (bar) bar.style.width = `${Math.round((100 * d) / Math.max(1, t))}%`;
-      }, { ...options(), overview: state.overview, from: state.from, to: state.to, singles: state.singles });
+      }, { ...options(), overview: state.overview, from: state.from, to: state.to, sizes: state.sizes });
       state.info = `Das Buch hat ${pages} Seiten`
         + (blankPages ? ` – davon ${blankPages} leer am Schluss, weil bookfactory mindestens ${BOOK.minPages} Seiten `
           + 'in 2er-Schritten verlangt (mehr Fotos liken füllt sie).' : '.')
