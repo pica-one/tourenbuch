@@ -34,11 +34,11 @@ export function createSync({ store, drive, clock = () => Date.now(), deviceName 
         return changedLocally ? newLocal : null;
       });
 
-      if (remote && sameContent(merged, remote)) return { changedLocally, wrote: false };
+      if (remote && sameContent(merged, remote)) return { changedLocally, wrote: false, doc: merged };
       const text = encode({ ...merged, savedAt: clock(), savedBy: deviceName });
       try {
         await drive.writeFile(DATA_PATH, text, remoteFile?.eTag ?? null);
-        return { changedLocally, wrote: true };
+        return { changedLocally, wrote: true, doc: merged };
       } catch (e) {
         // Ein anderes Gerät war schneller: von vorne (mit dessen Stand)
         if (e instanceof ConflictError && attempt < MAX_ATTEMPTS) continue;

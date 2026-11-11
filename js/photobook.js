@@ -213,23 +213,6 @@ export function bookTitle(fromIso, toIso) {
   return a === b ? `Touren ${a}` : `Touren ${a} – ${b}`;
 }
 
-/** Titelseite: grosser Titel in der Mitte, darunter Zeitraum und Anzahl Touren. */
-function drawTitlePage(pdf, theme, title, sub) {
-  const b = BOOK.bleed;
-  const cx = b + PAGE.w / 2;
-  drawBackground(pdf, theme);
-  pdf.setFont('BebasNeue', 'normal');
-  pdf.setFontSize(64);
-  pdf.setTextColor(...theme.title);
-  pdf.text(title.toUpperCase(), cx, b + PAGE.h / 2, { align: 'center' });
-  pdf.setFillColor(...theme.accent);
-  pdf.rect(cx - 15, b + PAGE.h / 2 + 7, 30, 1.2, 'F');
-  pdf.setFont('Roboto', 'normal');
-  pdf.setFontSize(13);
-  pdf.setTextColor(...theme.text);
-  pdf.text(sub, cx, b + PAGE.h / 2 + 18, { align: 'center' });
-}
-
 const OVERVIEW = { rowH: 7.2, perColumn: 21, bigRows: 12 };
 
 /** Wie viele Seiten die Übersicht für n Touren braucht (2 Spalten pro Seite). */
@@ -453,20 +436,69 @@ export function justifiedCells(ratios, area, gap = PAGE.gap) {
 export const PAGE_SIZES = [1, 2, 3, 4, 6];
 
 /**
- * Seiten einer Tour planen. sizeOf(foto) = gewählte Seitengrösse (0 = automatisch).
- * Ergebnis: [{ g: Fotos, single?: true, slots: Plätze (0 = automatisch) }], nach Aufnahmezeit;
- * die erste Seite hat mehrere Fotos (dort steht der Titel), sofern es eine solche gibt.
+ * Reihenfolge der Fotos einer Tour im Buch. photos = nach Aufnahmezeit; order = von Hand gesetzte Reihenfolge
+ * (Liste von OneDrive-Kennungen, null = Aufnahmezeit). Fotos, die in order fehlen (neu gelikt), kommen hinter das
+ * Foto, das zeitlich davor liegt. Danach stehen die Fotos einer gewählten Seite (pickOf(foto) = { s, g }) beisammen,
+ * dort, wo ihr erstes Foto steht.
  */
-export function planTourPages(photos, sizeOf, random = Math.random) {
-  const plan = groupPhotos(photos.filter((p) => !sizeOf(p)), random).map((g) => ({ g, slots: 0 }));
-  for (const s of PAGE_SIZES) {
-    const list = photos.filter((p) => sizeOf(p) === s);
-    if (s === 1) list.forEach((p) => plan.push({ g: [p], single: true, slots: 1 }));
-    else for (let i = 0; i < list.length; i += s) plan.push({ g: list.slice(i, i + s), slots: s });
+export function bookOrder(photos, pickOf, order = null) {
+  let list = photos;
+  if (order?.length) {
+    const byId = new Map(photos.map((p) => [p.oneDriveItemId, p]));
+    list = [...new Set(order)].map((id) => byId.get(id)).filter(Boolean);
+    const placed = new Set(list);
+    photos.forEach((p, i) => {
+      if (placed.has(p)) return;
+      let j = i - 1;
+      while (j >= 0 && !placed.has(photos[j])) j--;
+      list.splice(j < 0 ? 0 : list.indexOf(photos[j]) + 1, 0, p);
+      placed.add(p);
+    });
   }
-  plan.sort((a, b) => photos.indexOf(a.g[0]) - photos.indexOf(b.g[0]));
-  const firstGroup = plan.findIndex((x) => !x.single);
-  if (firstGroup > 0) plan.unshift(plan.splice(firstGroup, 1)[0]);
+  const key = (p) => {
+    const k = pickOf(p);
+    return k && k.s > 1 ? `${k.s}:${k.g}` : null;
+  };
+  const out = [];
+  const done = new Set();
+  for (const p of list) {
+    const k = key(p);
+    if (!k) out.push(p);
+    else if (!done.has(k)) {
+      done.add(k);
+      out.push(...list.filter((q) => key(q) === k));
+    }
+  }
+  return out;
+}
+
+/**
+ * Seiten einer Tour planen. pickOf(foto) = gewählte Seite { s: Grösse, g: Nummer der Seite } oder null (automatisch).
+ * Fotos mit derselben Wahl bleiben auf derselben Seite (bei mehr Fotos als Plätzen: weitere Seiten gleicher Grösse).
+ * Ergebnis: [{ g: Fotos, single?: true, slots: Plätze (0 = automatisch) }] in der Reihenfolge von bookOrder;
+ * ohne eigene Reihenfolge hat die erste Seite mehrere Fotos (dort steht der Titel), sofern es eine solche gibt.
+ */
+export function planTourPages(photos, pickOf, random = Math.random, order = null) {
+  const list = bookOrder(photos, pickOf, order);
+  const plan = groupPhotos(list.filter((p) => !pickOf(p)), random).map((g) => ({ g, slots: 0 }));
+  const groups = new Map();
+  for (const p of list) {
+    const k = pickOf(p);
+    if (!k) continue;
+    if (k.s === 1) {
+      plan.push({ g: [p], single: true, slots: 1 });
+      continue;
+    }
+    const key = `${k.s}:${k.g}`;
+    if (!groups.has(key)) groups.set(key, { s: k.s, photos: [] });
+    groups.get(key).photos.push(p);
+  }
+  for (const { s, photos: m } of groups.values()) for (let i = 0; i < m.length; i += s) plan.push({ g: m.slice(i, i + s), slots: s });
+  plan.sort((a, b) => list.indexOf(a.g[0]) - list.indexOf(b.g[0]));
+  if (!order?.length) {
+    const firstGroup = plan.findIndex((x) => !x.single);
+    if (firstGroup > 0) plan.unshift(plan.splice(firstGroup, 1)[0]);
+  }
   return plan;
 }
 
@@ -652,7 +684,8 @@ function renderCell(bitmap, cell, quality) {
  * Die Fotos werden der Reihe nach geladen, damit auch grosse Bücher wenig Speicher brauchen.
  */
 export async function createPhotobookPdf(drive, selection, onProgress = () => {},
-  { wait = sleep, quality = QUALITY.high, theme = THEMES.creme, minPages = BOOK.minPages, intro = true, overview = true, title, from, to, random = Math.random, singles = new Set(), sizes = new Map() } = {}) {
+  { wait = sleep, quality = QUALITY.high, theme = THEMES.creme, minPages = BOOK.minPages, overview = true, random = Math.random,
+    singles = new Set(), sizes = new Map(), picks = new Map(), order = new Map() } = {}) {
   // Seite mit Beschnitt: 303 × 216 mm
   const format = [PAGE.w + 2 * BOOK.bleed, PAGE.h + 2 * BOOK.bleed];
   // putOnlyUsedFonts (in newPdf): sonst stehen die 14 Standardschriften (nicht eingebettet) im PDF und die Druckerei meckert
@@ -661,11 +694,17 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
   const missing = [];
   const problems = [];
   let done = 0;
-  // Vorne Titelseite und Übersicht (werden am Schluss gezeichnet, wenn die Seitenzahlen bekannt sind)
-  const overviewPages = intro && overview ? overviewPageCount(selection.length) : 0;
-  const introPages = intro ? 1 + overviewPages : 0;
-  for (let i = 1; i < introPages; i++) pdf.addPage(format, 'landscape');
-  let pages = introPages;
+  // Vorne auf Wunsch das Inhaltsverzeichnis (wird am Schluss gezeichnet, wenn die Seitenzahlen bekannt sind)
+  const overviewPages = overview ? overviewPageCount(selection.length) : 0;
+  for (let i = 1; i < overviewPages; i++) pdf.addPage(format, 'landscape');
+  let pages = overviewPages;
+  // Gewählte Seiten; sizes/singles = ältere Form (nur Grösse pro Foto)
+  const pickOf = (p) => {
+    const id = p.oneDriveItemId;
+    if (picks.has(id)) return picks.get(id);
+    if (sizes.has(id)) return { s: sizes.get(id), g: 0 };
+    return singles.has(id) ? { s: 1, g: 0 } : null;
+  };
   const entries = [];
   const lowRes = []; // Fotos, die für ihr Feld zu wenig Bildpunkte haben (Druckerei warnt)
   // Allein auf einer Seite nur Querformate mit genug Bildpunkten für die ganze Breite (beim Druck aus dem Original)
@@ -675,7 +714,7 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
     // Seitenplan: gewählte Einzelfotos je auf eine ganze Seite; Fotos mit gewählter Seitengrösse (2er/3er/4er/6er)
     // der Reihe nach auf Seiten dieser Grösse (die letzte darf unvollständig sein); die übrigen automatisch zu 2–3.
     // In Aufnahme-Reihenfolge, aber die Tour beginnt mit einer Seite mit mehreren Fotos (dort steht der Titel).
-    const plan = planTourPages(photos, (p) => sizes.get(p.oneDriveItemId) ?? (singles.has(p.oneDriveItemId) ? 1 : 0), random);
+    const plan = planTourPages(photos, pickOf, random, order.get(tour.id));
     let firstPage = null;
     const early = new Map(); // schon geladene Fotos (Blick voraus aufs letzte Foto)
     const fetchItem = async (photo) => {
@@ -787,13 +826,8 @@ export async function createPhotobookPdf(drive, selection, onProgress = () => {}
     drawBackground(pdf, theme);
     pages++;
   }
-  if (intro) {
-    const first = from ?? selection[0].tour.dates.value.start;
-    const last = to ?? selection[selection.length - 1].tour.dates.value.start;
-    const n = entries.length;
-    pdf.setPage(1);
-    drawTitlePage(pdf, theme, title || bookTitle(first, last), `${dateRange({ start: first, end: last })}  ·  ${n} ${n === 1 ? 'Tour' : 'Touren'}`);
-    if (overviewPages) drawOverview(pdf, theme, entries, 2, overviewPages);
+  if (overviewPages) {
+    drawOverview(pdf, theme, entries, 1, overviewPages);
     pdf.setPage(pages);
   }
   return { blob: pdf.output('blob'), missing, reason, pages, blankPages: pages - filled, lowRes };
@@ -964,15 +998,31 @@ async function loadThumbs(root, drive) {
 const SIZE_COLORS = { 0: '#888888', 1: '#2e5e4e', 2: '#2b6cb0', 3: '#7b4fa0', 4: '#c05621', 6: '#8a5a2b' };
 const sizeLabel = (s) => (s === 0 ? 'Automatisch' : s === 1 ? 'Einzelfoto' : `${s}er-Seite`);
 
-/** Stand pro Seitengrösse einer Tour: { size, count, pages, open (freie Plätze auf der letzten Seite) }; size 0 = automatisch. */
-export function sizeStatus(photos, sizes) {
+/**
+ * Stand der gewählten Seiten einer Tour (photos in Buch-Reihenfolge, picks = Map Kennung → { s, g }):
+ * Einzelfotos zusammengefasst { size: 1, count, pages }, jede gewählte Seite einzeln { size, g, no (Nummer pro Grösse),
+ * count, pages, open (freie Plätze) }, zuletzt die automatischen { size: 0, count }.
+ */
+export function sizeStatus(photos, picks) {
   const out = [];
-  for (const s of [...PAGE_SIZES, 0]) {
-    const count = photos.filter((p) => (sizes.get(p.oneDriveItemId) ?? 0) === s).length;
-    if (!count) continue;
-    const pages = s === 0 ? 0 : s === 1 ? count : Math.ceil(count / s);
-    out.push({ size: s, count, pages, open: s > 1 ? pages * s - count : 0 });
+  const singles = photos.filter((p) => picks.get(p.oneDriveItemId)?.s === 1).length;
+  if (singles) out.push({ size: 1, count: singles, pages: singles, open: 0 });
+  const groups = new Map();
+  const perSize = {};
+  for (const p of photos) {
+    const k = picks.get(p.oneDriveItemId);
+    if (!k || k.s === 1) continue;
+    const key = `${k.s}:${k.g}`;
+    if (!groups.has(key)) groups.set(key, { size: k.s, g: k.g, no: (perSize[k.s] = (perSize[k.s] ?? 0) + 1), count: 0 });
+    groups.get(key).count++;
   }
+  for (const x of groups.values()) {
+    x.pages = Math.ceil(x.count / x.size);
+    x.open = x.pages * x.size - x.count;
+    out.push(x);
+  }
+  const auto = photos.filter((p) => !picks.has(p.oneDriveItemId)).length;
+  if (auto) out.push({ size: 0, count: auto, pages: 0, open: 0 });
   return out;
 }
 
@@ -980,21 +1030,90 @@ function statusText(s) {
   if (s.size === 0) return `<span class="muted">Automatisch (2er/3er): ${s.count} ${s.count === 1 ? 'Foto' : 'Fotos'}</span>`;
   const dot = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${SIZE_COLORS[s.size]}"></span>`;
   if (s.size === 1) return `${dot} Einzelfotos: ${s.count} → ${s.count} ${s.count === 1 ? 'Seite' : 'Seiten'} ✓`;
-  const pagesText = `${s.pages} ${s.pages === 1 ? 'Seite' : 'Seiten'}`;
-  return `${dot} ${s.size}er: ${s.count} ${s.count === 1 ? 'Foto' : 'Fotos'} → ${pagesText} `
-    + (s.open ? `<span style="color:#c05621">⚠ letzte Seite erst ${s.size - s.open} von ${s.size} – noch ${s.open} frei</span>` : '✓ voll');
+  const what = `${s.size}er-Seite ${s.no}: ${s.count} von ${s.pages * s.size}`;
+  return `${dot} ${what} `
+    + (s.open ? `<span style="color:#c05621">⚠ noch ${s.open} frei</span>` : '✓ voll');
 }
 
-// Auswahl fürs Buch im Browser merken (nur auf diesem Gerät), damit sie nach dem Neuladen noch da ist
+/** Nummer für eine neue gewählte Seite (grösser als alle bisherigen). */
+function newGroupNo(picks) {
+  let max = 0;
+  for (const k of picks.values()) if (typeof k.g === 'number' && k.g > max) max = k.g;
+  return max + 1;
+}
+
+/**
+ * Foto antippen mit der Seitengrösse s: gleiche Grösse nochmals = wieder automatisch; sonst kommt das Foto auf die
+ * angefangene (noch nicht volle) Seite dieser Grösse in der Tour, bzw. auf eine neue. Ändert picks.
+ */
+export function togglePick(picks, tourPhotos, id, s) {
+  const cur = picks.get(id);
+  if (!s || cur?.s === s) {
+    picks.delete(id);
+    return;
+  }
+  if (s === 1) {
+    picks.set(id, { s: 1, g: newGroupNo(picks) });
+    return;
+  }
+  picks.delete(id);
+  const counts = new Map();
+  for (const p of tourPhotos) {
+    const k = picks.get(p.oneDriveItemId);
+    if (k?.s === s) counts.set(k.g, (counts.get(k.g) ?? 0) + 1);
+  }
+  const open = [...counts].filter(([, n]) => n < s).map(([g]) => g).filter((g) => typeof g === 'number');
+  picks.set(id, { s, g: open.length ? Math.max(...open) : newGroupNo(picks) });
+}
+
+/**
+ * Foto (bzw. die ganze gewählte Seite, auf der es ist) vor das Foto `to` schieben; to = null: ans Ende.
+ * Ergebnis: neue Reihenfolge (Liste von Kennungen) für state.order.
+ */
+export function moveInOrder(photos, pickOf, order, from, to) {
+  const list = bookOrder(photos, pickOf, order);
+  const ids = list.map((p) => p.oneDriveItemId);
+  const keyOf = (id) => {
+    const k = pickOf(list[ids.indexOf(id)]);
+    return k && k.s > 1 ? `${k.s}:${k.g}` : null;
+  };
+  const fk = keyOf(from);
+  const moving = fk ? ids.filter((id) => keyOf(id) === fk) : [from];
+  // Ziel auf einer gewählten Seite: vor diese ganze Seite
+  if (to != null) {
+    const tk = keyOf(to);
+    if (tk) to = ids.find((id) => keyOf(id) === tk);
+    if (moving.includes(to)) return ids;
+  }
+  const rest = ids.filter((id) => !moving.includes(id));
+  rest.splice(to == null ? rest.length : rest.indexOf(to), 0, ...moving);
+  return rest;
+}
+
+// Auswahl fürs Buch merken: sofort im Browser (schnell, auch ohne Internet) und – kurz danach – als eigene kleine
+// Datei auf OneDrive, damit sie auf allen Geräten gleich ist und auch nach dem Löschen der Browser-Daten bleibt.
+// Die Tourenbuch-Datei (und damit die Handy-App) bleibt davon unberührt. Es gilt die zuletzt gespeicherte Auswahl.
 const CHOICES_KEY = 'tourenbuch-fotobuch';
-function loadChoices(state) {
-  try {
-    const c = JSON.parse(localStorage.getItem(CHOICES_KEY) || '{}');
-    if (Array.isArray(c.excluded)) state.excluded = new Set(c.excluded);
-    state.sizes = new Map();
-    if (Array.isArray(c.singles)) c.singles.forEach((id) => state.sizes.set(id, 1)); // frühere Version: nur Einzelfotos
+export const CHOICES_PATH = 'Apps/Tourenbuch/fotobuch.json';
+const CHOICES_FORMAT = 'tourenbuch-fotobuch';
+
+/** Gemerkte Auswahl (aus dem Browser oder von OneDrive) in state übernehmen. */
+export function applyChoices(state, c) {
+  if (!c || typeof c !== 'object') return;
+  {
+    state.excluded = new Set(Array.isArray(c.excluded) ? c.excluded : []);
+    state.picks = new Map();
+    // frühere Versionen: nur Einzelfotos bzw. nur die Grösse pro Foto (alle Fotos gleicher Grösse = eine Seitenfolge)
+    if (Array.isArray(c.singles)) c.singles.forEach((id) => state.picks.set(id, { s: 1, g: 'alt' }));
     if (c.sizes && typeof c.sizes === 'object') {
-      for (const [id, s] of Object.entries(c.sizes)) if (PAGE_SIZES.includes(s)) state.sizes.set(id, s);
+      for (const [id, s] of Object.entries(c.sizes)) if (PAGE_SIZES.includes(s)) state.picks.set(id, { s, g: 'alt' });
+    }
+    if (c.picks && typeof c.picks === 'object') {
+      for (const [id, k] of Object.entries(c.picks)) if (Array.isArray(k) && PAGE_SIZES.includes(k[0])) state.picks.set(id, { s: k[0], g: k[1] });
+    }
+    state.order = new Map();
+    if (c.order && typeof c.order === 'object') {
+      for (const [id, list] of Object.entries(c.order)) if (Array.isArray(list)) state.order.set(id, list);
     }
     if (typeof c.title === 'string') state.title = c.title;
     if (typeof c.overview === 'boolean') state.overview = c.overview;
@@ -1002,19 +1121,105 @@ function loadChoices(state) {
     if (c.spine > 0) state.spine = c.spine;
     if (typeof c.coverFront === 'string') state.coverFront = c.coverFront;
     if (Array.isArray(c.coverBack)) state.coverBack = c.coverBack;
+  }
+  state.choicesSavedAt = Number(c.savedAt) || 0;
+}
+
+/** Auswahl als einfache Daten (für Browser und OneDrive-Datei). */
+export function choicesData(state) {
+  return {
+    format: CHOICES_FORMAT, version: 1, savedAt: state.choicesSavedAt ?? 0,
+    excluded: [...(state.excluded ?? [])], title: state.title, overview: state.overview,
+    picks: Object.fromEntries([...(state.picks ?? [])].map(([id, k]) => [id, [k.s, k.g]])),
+    order: Object.fromEntries(state.order ?? []),
+    theme: state.theme, spine: state.spine, coverFront: state.coverFront, coverBack: state.coverBack,
+  };
+}
+
+function loadChoices(state) {
+  try {
+    applyChoices(state, JSON.parse(localStorage.getItem(CHOICES_KEY) || '{}'));
   } catch {
     /* nichts gemerkt */
   }
 }
-function saveChoices(state) {
+
+function saveLocal(state) {
   try {
-    localStorage.setItem(CHOICES_KEY, JSON.stringify({
-      excluded: [...(state.excluded ?? [])], sizes: Object.fromEntries(state.sizes ?? []), title: state.title, overview: state.overview,
-      theme: state.theme, spine: state.spine, coverFront: state.coverFront, coverBack: state.coverBack,
-    }));
+    localStorage.setItem(CHOICES_KEY, JSON.stringify(choicesData(state)));
   } catch {
     /* Speichern nicht möglich - dann eben nur bis zum Neuladen */
   }
+}
+
+function saveChoices(state) {
+  state.choicesSavedAt = Date.now();
+  saveLocal(state);
+  // Auf OneDrive erst nach einer kurzen Pause (beim Antippen vieler Fotos nur einmal schreiben)
+  if (!state.drive) return;
+  clearTimeout(state.remoteTimer);
+  state.remoteTimer = setTimeout(() => pushChoices(state), 1500);
+}
+
+const isConflict = (e) => e?.status === 409 || e?.status === 412;
+const parseChoices = (remote) => {
+  try {
+    const c = remote && JSON.parse(remote.text);
+    return c?.format === CHOICES_FORMAT ? c : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Auswahl in die OneDrive-Datei schreiben. Bei Konflikt neu lesen; ist die dort neuer, wird sie übernommen. */
+export async function pushChoices(state, drive = state.drive) {
+  state.remoteTimer = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      state.remoteETag = await drive.writeFile(CHOICES_PATH, JSON.stringify(choicesData(state)), state.remoteETag ?? null);
+      state.remoteStatus = 'ok';
+      return true;
+    } catch (e) {
+      if (!isConflict(e)) {
+        console.warn('Fotobuch-Auswahl nicht auf OneDrive gespeichert', e);
+        state.remoteStatus = 'error';
+        state.onRemote?.();
+        return false;
+      }
+      const remote = await drive.readFile(CHOICES_PATH).catch(() => null);
+      state.remoteETag = remote?.eTag ?? null;
+      const c = parseChoices(remote);
+      if (c && Number(c.savedAt) > (state.choicesSavedAt ?? 0)) {
+        applyChoices(state, c);
+        if (state.drive) saveLocal(state); // nur in der App (Tests lassen den Browser-Speicher in Ruhe)
+        state.remoteStatus = 'ok';
+        state.onRemote?.();
+        return false;
+      }
+    }
+  }
+  state.remoteStatus = 'error';
+  return false;
+}
+
+/**
+ * Auswahl von OneDrive holen. Ist sie dort neuer als im Browser, wird sie übernommen; gibt es dort noch keine
+ * (oder ist die im Browser neuer), wird die aus dem Browser hochgeladen. Ergebnis: true, wenn sich state geändert hat.
+ */
+export async function pullChoices(state, drive = state.drive) {
+  const remote = await drive.readFile(CHOICES_PATH);
+  state.remoteETag = remote?.eTag ?? null;
+  const c = parseChoices(remote);
+  const mine = state.choicesSavedAt ?? 0;
+  if (c && Number(c.savedAt) > mine) {
+    applyChoices(state, c);
+    if (state.drive) saveLocal(state); // nur in der App (Tests lassen den Browser-Speicher in Ruhe)
+    state.remoteStatus = 'ok';
+    return true;
+  }
+  if (!c || Number(c.savedAt) < mine) await pushChoices(state, drive);
+  else state.remoteStatus = 'ok';
+  return false;
 }
 
 /**
@@ -1026,13 +1231,33 @@ export function renderPhotobook(root, ctx, state) {
     state.loaded = true;
     loadChoices(state);
   }
+  // Auswahl mit OneDrive abgleichen: beim Öffnen der Seite, danach höchstens jede Minute (anderes Gerät)
+  state.drive = ctx.drive && !ctx.demo ? ctx.drive : null;
+  state.onRemote = () => {
+    if (root.isConnected && location.hash.startsWith('#/fotobuch')) renderPhotobook(root, ctx, state);
+  };
+  if (state.drive && !state.pulling && !state.remoteTimer && Date.now() - (state.pulledAt ?? 0) > 60000) {
+    state.pulling = true;
+    state.pulledAt = Date.now();
+    pullChoices(state)
+      .then((changed) => changed && state.onRemote())
+      .catch((e) => {
+        console.warn('Fotobuch-Auswahl nicht von OneDrive geladen', e);
+        state.remoteStatus = 'error';
+        state.pulledAt = 0;
+      })
+      .finally(() => (state.pulling = false));
+  }
   const year = todayIso().slice(0, 4);
   state.from ??= `${year}-01-01`;
   state.to ??= `${year}-12-31`;
   state.quality ??= 'high';
   state.excluded ??= new Set();
-  state.sizes ??= new Map();
+  state.picks ??= new Map();
+  state.order ??= new Map();
   state.sizeTool ??= 1;
+  const pickOf = (p) => state.picks.get(p.oneDriveItemId) ?? null;
+  const MOVE = -1; // Werkzeug "Verschieben"
   state.open ??= new Set();
   state.coverOpen ??= new Set();
   state.overview ??= true;
@@ -1058,54 +1283,82 @@ export function renderPhotobook(root, ctx, state) {
     ${topbar('Fotobuch', { back: true })}
     <div class="section"><div class="panel">
       <p class="muted" style="margin-top:0">Alle Fotos mit ♥ aus den gewählten Touren als PDF (A4 Querformat),
-        passend für bookfactory.ch „PDF to Book“ (Hardcover, A4 quer). Vorne eine Titelseite (und auf Wunsch ein Inhaltsverzeichnis),
-        dann jede Tour ab einer neuen Seite – der Titel steht auf ihrer ersten Seite; die Fotos in Aufnahme-Reihenfolge.</p>
+        passend für bookfactory.ch „PDF to Book“ (Hardcover, A4 quer). Vorne auf Wunsch ein Inhaltsverzeichnis,
+        dann jede Tour ab einer neuen Seite – der Titel steht auf ihrer ersten Seite; die Fotos in Aufnahme-Reihenfolge
+        (oder wie du sie verschoben hast).</p>
       <div class="dates">
         <label class="field"><span>Von</span><input type="date" id="pbFrom" value="${state.from}" ${dis}></label>
         <label class="field"><span>Bis</span><input type="date" id="pbTo" value="${state.to}" ${dis}></label>
       </div>
       <p><strong>${chosen.length} ${chosen.length === 1 ? 'Tour' : 'Touren'} · ${photoTotal} ${photoTotal === 1 ? 'Foto' : 'Fotos'} mit ♥</strong>
         ${selection.length > chosen.length ? `<span class="muted">(${selection.length - chosen.length} abgewählt)</span>` : ''}</p>
-      ${selection.length ? `<p class="muted" style="font-size:.85rem;margin:4px 0">Haken = Tour kommt ins Buch. ▸ aufklappen, unten
-        die Seitengrösse wählen und Fotos antippen (nochmals antippen = wieder automatisch). <strong>Einzelfoto</strong> = randlos
-        eine ganze Seite (am besten Querformat). Fotos ohne Wahl kommen automatisch zu 2 oder 3 auf eine Seite.</p>
+      ${state.drive ? `<p class="muted" style="font-size:.8rem;margin:2px 0">${state.remoteStatus === 'error'
+        ? '<span style="color:#c05621">⚠ Deine Auswahl konnte nicht auf OneDrive gespeichert werden (nur in diesem Browser). Wird beim nächsten Antippen nochmals versucht.</span>'
+        : 'Deine Auswahl (Seiten, Reihenfolge, Umschlag …) wird auf OneDrive gespeichert (Apps/Tourenbuch/fotobuch.json) und ist auf allen Geräten gleich.'}</p>` : ''}
+      ${selection.length ? `<p class="muted" style="font-size:.85rem;margin:4px 0">Haken = Tour kommt ins Buch. ▸ aufklappen, oben
+        die Seitengrösse wählen und Fotos antippen (nochmals antippen = wieder automatisch). Die Fotos, die du für eine 3er-, 4er- oder
+        6er-Seite antippst, bleiben zusammen auf <em>ihrer</em> Seite; ist sie voll, beginnt das nächste Foto eine neue.
+        <strong>Einzelfoto</strong> = randlos eine ganze Seite (am besten Querformat). Fotos ohne Wahl kommen automatisch zu 2 oder 3
+        auf eine Seite. <strong>Verschieben</strong>: Foto antippen, dann das Foto, vor das es soll (eine gewählte Seite wandert als Ganzes).</p>
         <div style="position:sticky;top:56px;z-index:4;background:var(--surface);padding:6px 0;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-          <span class="muted" style="font-size:.85rem">Antippen setzt:</span>
-          ${[...PAGE_SIZES, 0].map((s) => `<button type="button" class="pbTool" data-size="${s}" ${dis}
-            style="padding:4px 10px;border-radius:14px;cursor:pointer;font-size:.85rem;border:2px solid ${SIZE_COLORS[s]};
-            background:${state.sizeTool === s ? SIZE_COLORS[s] : 'transparent'};color:${state.sizeTool === s ? '#fff' : 'inherit'}">${sizeLabel(s)}</button>`).join('')}
+          <span class="muted" style="font-size:.85rem">Antippen:</span>
+          ${[...PAGE_SIZES, 0, MOVE].map((s) => {
+            const color = s === MOVE ? '#444444' : SIZE_COLORS[s];
+            return `<button type="button" class="pbTool" data-size="${s}" ${dis}
+            style="padding:4px 10px;border-radius:14px;cursor:pointer;font-size:.85rem;border:2px solid ${color};
+            background:${state.sizeTool === s ? color : 'transparent'};color:${state.sizeTool === s ? '#fff' : 'inherit'}">${s === MOVE ? '⇄ Verschieben' : sizeLabel(s)}</button>`;
+          }).join('')}
+          ${selection.some((x) => x.photos.some((p) => state.picks.has(p.oneDriveItemId)))
+            ? (state.confirmClear
+              ? `<span style="margin-left:auto;font-size:.8rem">Bei allen ${selection.length} Touren aufheben?
+                  <button type="button" id="pbClearYes" ${dis} style="font-size:.8rem;padding:3px 8px;cursor:pointer;background:#c05621;color:#fff;border:0;border-radius:4px">Ja, alle aufheben</button>
+                  <button type="button" id="pbClearNo" ${dis} style="font-size:.8rem;padding:3px 8px;cursor:pointer">Nein</button></span>`
+              : `<button type="button" id="pbClearAll" ${dis} style="margin-left:auto;font-size:.8rem;padding:3px 8px;cursor:pointer">Alle Seitenwahlen im Zeitraum aufheben</button>`)
+            : ''}
         </div>
         <div>${selection.map((x) => {
-          const st = sizeStatus(x.photos, state.sizes);
+          const ordered = bookOrder(x.photos, pickOf, state.order.get(x.tour.id));
+          const st = sizeStatus(ordered, state.picks);
           const warn = st.some((s) => s.open);
+          const groupNo = new Map(st.filter((s) => s.g != null).map((s) => [`${s.size}:${s.g}`, s.no]));
+          const moving = state.sizeTool === MOVE && state.moveFrom && x.photos.some((p) => p.oneDriveItemId === state.moveFrom);
           return `<details class="pbTourBox" data-id="${esc(x.tour.id)}" ${state.open.has(x.tour.id) ? 'open' : ''} style="margin:2px 0">
           <summary style="${plain};cursor:pointer;align-items:center">
             <span class="pbArrow" style="display:inline-block;width:12px;color:#888">▸</span>
             <input type="checkbox" class="pbTour" data-id="${esc(x.tour.id)}" ${state.excluded.has(x.tour.id) ? '' : 'checked'} ${dis}>
             <span>${esc(captionOf(x.tour))} <span class="muted">(${x.photos.length})</span>
               ${st.filter((s) => s.size).map((s) => `<span style="font-size:.75rem;padding:0 5px;border-radius:4px;color:#fff;background:${SIZE_COLORS[s.size]}">${s.size === 1 ? `${s.count} einzeln` : `${s.size}er ${s.count}/${s.pages * s.size}`}</span>`).join(' ')}
+              ${state.order.has(x.tour.id) ? '<span title="Reihenfolge von Hand geändert" style="font-size:.75rem">⇄</span>' : ''}
               ${warn ? '<span title="Eine Seite ist noch nicht voll" style="color:#c05621">⚠</span>' : ''}</span></summary>
           <div style="margin:6px 0 10px 40px">
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px">
-            ${x.photos.map((p) => {
-              const s = state.sizes.get(p.oneDriveItemId) ?? 0;
-              const pageNo = s > 1 ? Math.floor(x.photos.filter((q) => state.sizes.get(q.oneDriveItemId) === s).indexOf(p) / s) + 1 : 0;
-              return `<button type="button" class="pbSize" data-id="${esc(p.oneDriveItemId)}" title="${esc(p.fileName)}" ${dis}
-                style="position:relative;padding:0;border:3px solid ${s ? SIZE_COLORS[s] : 'transparent'};border-radius:6px;overflow:hidden;aspect-ratio:1;background:#8883;cursor:pointer">
+            ${ordered.map((p, i) => {
+              const k = pickOf(p);
+              const s = k?.s ?? 0;
+              const selected = state.moveFrom === p.oneDriveItemId;
+              const label = !s ? '' : s === 1 ? 'Einzel' : `${s}er · S.${groupNo.get(`${s}:${k.g}`)}`;
+              const border = selected ? '3px dashed #000' : `3px solid ${s ? SIZE_COLORS[s] : 'transparent'}`;
+              return `<button type="button" class="pbSize" data-id="${esc(p.oneDriveItemId)}" data-tour="${esc(x.tour.id)}" title="${esc(p.fileName)}" ${dis}
+                style="position:relative;padding:0;border:${border};border-radius:6px;overflow:hidden;aspect-ratio:1;background:#8883;cursor:pointer;${selected ? 'opacity:.6;' : ''}">
                 <img data-thumb="${esc(p.oneDriveItemId)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block">
-                ${s ? `<span style="position:absolute;left:4px;top:4px;background:${SIZE_COLORS[s]};color:#fff;font-size:.7rem;padding:1px 5px;border-radius:4px">${s === 1 ? 'Einzel' : `${s}er · S.${pageNo}`}</span>` : ''}
+                ${label ? `<span style="position:absolute;left:4px;top:4px;background:${SIZE_COLORS[s]};color:#fff;font-size:.7rem;padding:1px 5px;border-radius:4px">${label}</span>` : ''}
+                <span style="position:absolute;right:4px;bottom:4px;background:#000a;color:#fff;font-size:.65rem;padding:0 4px;border-radius:4px">${i + 1}</span>
               </button>`;
             }).join('')}
+            ${moving ? `<button type="button" class="pbMoveEnd" data-tour="${esc(x.tour.id)}" ${dis}
+                style="border:3px dashed #888;border-radius:6px;aspect-ratio:1;background:transparent;cursor:pointer;font-size:.8rem">ans Ende</button>` : ''}
             </div>
             <div style="font-size:.85rem;margin-top:6px;display:flex;flex-direction:column;gap:2px">
               ${st.map((s) => `<div>${statusText(s)}</div>`).join('')}
+              ${x.photos.some((p) => state.picks.has(p.oneDriveItemId)) ? `<div><button type="button" class="pbClearTour" data-tour="${esc(x.tour.id)}" ${dis}
+                style="font-size:.8rem;padding:2px 8px;cursor:pointer">Seitenwahl dieser Tour aufheben (alle wieder automatisch)</button></div>` : ''}
+              ${state.order.has(x.tour.id) ? `<div><button type="button" class="pbResetOrder" data-tour="${esc(x.tour.id)}" ${dis}
+                style="font-size:.8rem;padding:2px 8px;cursor:pointer">Reihenfolge zurück auf Aufnahmezeit</button></div>` : ''}
             </div>
           </div></details>`;
         }).join('')}</div>`
         : '<p class="muted">Keine Fotos mit ♥ in diesem Zeitraum. Like Fotos in der Grossansicht mit dem Herz.</p>'}
-      <label class="field" style="margin-top:12px"><span>Titel (Titelseite und Umschlag)</span>
-        <input type="text" id="pbTitle" value="${esc(title)}" maxlength="60" ${dis}></label>
-      <label style="${plain}"><input type="checkbox" id="pbOverview" ${state.overview ? 'checked' : ''} ${dis}> Inhaltsverzeichnis nach der Titelseite</label>
+      <label style="${plain};margin-top:12px"><input type="checkbox" id="pbOverview" ${state.overview ? 'checked' : ''} ${dis}> Inhaltsverzeichnis vorne im Buch</label>
       <div style="margin:12px 0"><span class="muted" style="font-size:.85rem">Hintergrund</span>
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px">
           ${Object.entries(THEMES).map(([key, t]) => `
@@ -1133,6 +1386,8 @@ export function renderPhotobook(root, ctx, state) {
       <h3 style="margin-top:0">Umschlag</h3>
       <p class="muted" style="margin-top:0">Eigenes PDF für den Umschlag (bookfactory verlangt ihn separat): vorne das Titelbild mit
         dem Titel, hinten bis ${COVER.maxBack} Fotos. Hintergrund wie beim Buch.</p>
+      <label class="field"><span>Titel auf dem Umschlag</span>
+        <input type="text" id="pbTitle" value="${esc(title)}" maxlength="60" ${dis}></label>
       <label class="field"><span>Buchrücken in mm (steht in der Umschlag-Musterdatei von bookfactory; 6 bei 16 Seiten)</span>
         <input type="number" id="pbSpine" min="1" max="80" step="0.5" value="${state.spine}" ${dis}></label>
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin:10px 0">
@@ -1196,13 +1451,54 @@ export function renderPhotobook(root, ctx, state) {
   }));
   root.querySelectorAll('.pbTool').forEach((b) => (b.onclick = () => {
     state.sizeTool = Number(b.dataset.size);
+    state.moveFrom = null;
     rerender();
   }));
+  const tourPhotos = (tourId) => selection.find((x) => x.tour.id === tourId)?.photos ?? [];
+  const moveTo = (tourId, to) => {
+    const next = moveInOrder(tourPhotos(tourId), pickOf, state.order.get(tourId), state.moveFrom, to);
+    state.order.set(tourId, next);
+    state.moveFrom = null;
+    saveChoices(state);
+    rerender();
+  };
   root.querySelectorAll('.pbSize').forEach((b) => (b.onclick = () => {
     const id = b.dataset.id;
-    // gleiche Wahl nochmals = wieder automatisch
-    if (state.sizeTool === 0 || state.sizes.get(id) === state.sizeTool) state.sizes.delete(id);
-    else state.sizes.set(id, state.sizeTool);
+    const tourId = b.dataset.tour;
+    if (state.sizeTool === MOVE) {
+      // erstes Antippen wählt das Foto, zweites das Ziel (gleiches Foto nochmals = abbrechen)
+      const fromHere = state.moveFrom && tourPhotos(tourId).some((p) => p.oneDriveItemId === state.moveFrom);
+      if (!fromHere || state.moveFrom === id) state.moveFrom = state.moveFrom === id ? null : id;
+      else return moveTo(tourId, id);
+      return rerender();
+    }
+    togglePick(state.picks, tourPhotos(tourId), id, state.sizeTool);
+    saveChoices(state);
+    rerender();
+  }));
+  root.querySelectorAll('.pbMoveEnd').forEach((b) => (b.onclick = () => moveTo(b.dataset.tour, null)));
+  // Seitenwahl (Einzel/2er/3er/4er/6er) aufheben – die von Hand gesetzte Reihenfolge bleibt
+  const clearPicks = (photos) => {
+    photos.forEach((p) => state.picks.delete(p.oneDriveItemId));
+    saveChoices(state);
+    rerender();
+  };
+  root.querySelectorAll('.pbClearTour').forEach((b) => (b.onclick = () => clearPicks(tourPhotos(b.dataset.tour))));
+  // Rückfrage direkt auf der Seite (confirm() wird in manchen Fenstern, z. B. eingebetteten Browsern, unterdrückt)
+  root.querySelector('#pbClearAll')?.addEventListener('click', () => {
+    state.confirmClear = true;
+    rerender();
+  });
+  root.querySelector('#pbClearNo')?.addEventListener('click', () => {
+    state.confirmClear = false;
+    rerender();
+  });
+  root.querySelector('#pbClearYes')?.addEventListener('click', () => {
+    state.confirmClear = false;
+    clearPicks(selection.flatMap((x) => x.photos));
+  });
+  root.querySelectorAll('.pbResetOrder').forEach((b) => (b.onclick = () => {
+    state.order.delete(b.dataset.tour);
     saveChoices(state);
     rerender();
   }));
@@ -1260,7 +1556,7 @@ export function renderPhotobook(root, ctx, state) {
         const bar = root.querySelector('.bar span');
         if (text) text.textContent = `Erstelle PDF … Foto ${d} von ${t}`;
         if (bar) bar.style.width = `${Math.round((100 * d) / Math.max(1, t))}%`;
-      }, { ...options(), overview: state.overview, from: state.from, to: state.to, sizes: state.sizes });
+      }, { ...options(), overview: state.overview, picks: state.picks, order: state.order });
       state.info = `Das Buch hat ${pages} Seiten`
         + (blankPages ? ` – davon ${blankPages} leer am Schluss, weil bookfactory mindestens ${BOOK.minPages} Seiten `
           + 'in 2er-Schritten verlangt (mehr Fotos liken füllt sie).' : '.')

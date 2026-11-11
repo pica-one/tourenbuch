@@ -7,6 +7,7 @@ import { icon, typeBadge, typeLabel, TYPE_NAMES } from './icons.js';
 import { AuthError, BusyError, createOneDrive } from './onedrive.js';
 import * as store from './store.js';
 import { createSync } from './sync.js';
+import { backupDue, writeBackup } from './backup.js';
 import { renderPhotobook } from './photobook.js';
 import { renderStats } from './stats.js';
 import { renderTour as renderTourScreen, updateUploadStatus } from './tour.js';
@@ -94,6 +95,7 @@ async function start() {
     if (meta.owner !== owner) await store.saveMeta({ owner });
   }
   state.lastSync = meta.lastSync ?? 0;
+  state.lastBackup = meta.lastBackup ?? 0;
   await book.load();
   book.subscribe(() => render());
   window.addEventListener('hashchange', () => render(true));
@@ -117,10 +119,22 @@ async function syncNow() {
   state.syncing = true;
   render();
   try {
-    await sync.run();
+    const result = await sync.run();
     state.lastSync = Date.now();
     state.syncProblem = null;
     await store.saveMeta({ lastSync: state.lastSync });
+    // Sicherung wie in der Handy-App (Ordner Tourenbuch_Backups) – ein Fehler dabei stört den Abgleich nicht
+    if (result?.doc && backupDue({ wrote: result.wrote, lastBackup: state.lastBackup, now: Date.now() })) {
+      try {
+        await writeBackup(drive, result.doc, Date.now());
+        state.lastBackup = Date.now();
+        state.backupProblem = null;
+        await store.saveMeta({ lastBackup: state.lastBackup });
+      } catch (e) {
+        console.warn('Sicherung auf OneDrive fehlgeschlagen', e);
+        state.backupProblem = 'Sicherung fehlgeschlagen: ' + (e.message || e) + ' – wird beim nächsten Abgleich nochmals versucht.';
+      }
+    }
   } catch (e) {
     console.error(e);
     if (e instanceof AuthError) state.syncProblem = { text: 'Anmeldung abgelaufen.', action: 'relogin' };
@@ -321,6 +335,10 @@ function renderSettings() {
       ${state.syncProblem ? `<div class="setting"><div class="label" style="color:var(--error)">${esc(state.syncProblem.text)}</div></div>` : ''}
       <div class="setting"><div class="label"><small>Die Touren werden mit der Datei <b>Apps/Tourenbuch/tourenbuch-daten.json</b>
         in deinem OneDrive abgeglichen – gleich wie in der Android-App.</small></div></div>
+      <div class="setting"><div class="label">Letzte Sicherung aus dem Web<small>${state.lastBackup ? dateTime(state.lastBackup) : 'noch nie'}</small></div></div>
+      ${state.backupProblem ? `<div class="setting"><div class="label" style="color:var(--error)">${esc(state.backupProblem)}</div></div>` : ''}
+      <div class="setting"><div class="label"><small>Sicherungen liegen in <b>${esc(storage.root)}/Tourenbuch_Backups</b>: „…-aktuell.json“
+        (neuester Stand) und eine Datei pro Monat. Die Web-App sichert nach jeder Änderung, sonst mindestens jede Woche.</small></div></div>
     </div></div>`}
     <div class="section"><h2>Tourenpartner</h2><div class="panel">
       <div class="setting"><div class="label"><small>Favoriten (★) erscheinen beim Erfassen einer Tour zum schnellen Antippen – höchstens 5.</small></div></div>

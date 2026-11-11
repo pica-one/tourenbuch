@@ -72,6 +72,13 @@ export function createOneDrive(getToken, fetchFn = (...a) => fetch(...a)) {
       return (await res.json()).eTag;
     },
 
+    /** Schreibt eine kleine Datei und ersetzt eine vorhandene (für Sicherungen). Fehlende Ordner legt OneDrive an. */
+    async replaceFile(path, text) {
+      const headers = { 'Content-Type': 'application/json' };
+      const res = await call(`${BASE}/me/drive/root:/${encodePath(path)}:/content?@microsoft.graph.conflictBehavior=replace`, { method: 'PUT', headers, body: text });
+      return (await res.json()).eTag;
+    },
+
     /**
      * Lädt eine Datei hoch (in Stücken, mit Fortschritt). Existiert der Name schon, bekommt die neue Datei
      * einen anderen Namen – es wird nie etwas überschrieben.
