@@ -96,6 +96,8 @@ a { color: var(--primary); }
 .search input { flex: 1; border: 0; background: transparent; outline: none; min-width: 0; }
 .chips { display: flex; gap: 8px; overflow-x: auto; padding: 0 16px 8px; scrollbar-width: none; }
 .chips::-webkit-scrollbar { display: none; }
+/* Am PC (Maus) lässt sich die Reihe nicht wischen: dort umbrechen statt seitlich schieben */
+@media (hover: hover) and (pointer: fine) { .chips { flex-wrap: wrap; } }
 .chip { flex: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; background: transparent; cursor: pointer; font-size: 0.9rem; }
 .chip.on { background: var(--primary-container); color: var(--on-primary-container); border-color: transparent; }
 .count { margin: 4px 16px 8px; color: var(--text-2); font-size: 0.9rem; }

@@ -242,7 +242,7 @@ function renderList() {
   const usedTypes = TOUR_TYPES.filter((t) => tours.some((x) => x.tourType.value === t));
   root.innerHTML = `
     ${topbar('Meine Touren', {
-      actions: `<span>${syncButton()}<a class="iconbtn" href="#/stats" aria-label="Statistik">${icon('chart')}</a><button class="iconbtn" data-action="settings" aria-label="Einstellungen">${icon('settings')}</button></span>`,
+      actions: `<span>${syncButton()}<a class="iconbtn" href="#/fotobuch" aria-label="Fotobuch" title="Fotobuch">${icon('book')}</a><a class="iconbtn" href="#/stats" aria-label="Statistik" title="Statistik">${icon('chart')}</a><button class="iconbtn" data-action="settings" aria-label="Einstellungen">${icon('settings')}</button></span>`,
     })}
     ${statusLine()}
     <div id="uploadbanner"></div>
