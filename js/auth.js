@@ -32,12 +32,15 @@ export async function initAuth() {
     console.warn('Rückkehr von der Anmeldung', e);
   }
   if (result?.account) app.setActiveAccount(result.account);
-  if (!app.getActiveAccount()) {
-    const accounts = app.getAllAccounts();
-    if (accounts.length) app.setActiveAccount(accounts[0]);
+  // Tourenbuch und LifePhotoBook liegen auf derselben Webseite (pica-one.github.io) und sehen gegenseitig die Konten.
+  // Darum nie einfach "irgendein" Konto nehmen, sondern nur das, mit dem man sich hier zuletzt angemeldet hat –
+  // so kann man im Tourenbuch mit einem und im LifePhotoBook mit einem anderen Konto angemeldet sein.
+  const hint = localStorage.getItem(HINT_KEY);
+  if (!app.getActiveAccount() && hint) {
+    const mine = app.getAllAccounts().find((a) => a.username?.toLowerCase() === hint.toLowerCase());
+    if (mine) app.setActiveAccount(mine);
   }
   // Anmeldung nicht mehr gespeichert, aber das Konto bekannt: still im Hintergrund wieder anmelden
-  const hint = localStorage.getItem(HINT_KEY);
   if (!app.getActiveAccount() && hint && navigator.onLine) {
     try {
       const r = await app.ssoSilent({ scopes: SCOPES, loginHint: hint });
