@@ -223,12 +223,14 @@ export function updateUploadStatus(root, tourId, uploader) {
 /** Hochladen: Fortschritt und Fehler dieser Tour */
 function uploadStatus(tourId, uploader) {
   const s = uploader.status();
-  const mine = s.current?.tourId === tourId;
+  const mine = s.active.filter((a) => a.tourId === tourId);
   const failed = s.failed.filter((f) => f.tourId === tourId);
   let html = '';
-  if (mine) {
-    const pct = Math.round((s.current.progress ?? 0) * 100);
-    html += `<div class="upload"><div class="uploadtext">Lade hoch: ${esc(s.current.name)} (${pct} %)${s.waiting ? ` · noch ${s.waiting} weitere` : ''}</div>
+  if (mine.length) {
+    const pct = Math.round((mine.reduce((n, a) => n + (a.progress ?? 0), 0) / mine.length) * 100);
+    const names = mine.length === 1 ? esc(mine[0].name) : `${mine.length} Dateien gleichzeitig`;
+    const done = s.uploaded ? ` · ${s.uploaded} fertig` : '';
+    html += `<div class="upload"><div class="uploadtext">Lade hoch: ${names} (${pct} %)${s.waiting ? ` · noch ${s.waiting} wartend` : ''}${done}</div>
       <div class="bar"><span style="width:${pct}%"></span></div></div>`;
   }
   if (failed.length) {

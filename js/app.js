@@ -58,7 +58,8 @@ function renderUploadBanner() {
   const box = document.getElementById('uploadbanner');
   if (!box) return;
   const s = uploader.status();
-  box.innerHTML = s.running ? `<div class="status">Lade hoch: ${esc(s.current?.name ?? '')}${s.waiting ? ` · noch ${s.waiting} weitere` : ''}</div>` : '';
+  const what = s.active.length > 1 ? `${s.active.length} Dateien gleichzeitig` : esc(s.current?.name ?? '');
+  box.innerHTML = s.running ? `<div class="status">Lade hoch: ${what}${s.waiting ? ` · noch ${s.waiting} wartend` : ''}</div>` : '';
 }
 
 const state = {

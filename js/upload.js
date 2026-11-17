@@ -1,5 +1,8 @@
-// Fotos, Topos und GPX-Dateien zu OneDrive hochladen – der Reihe nach, wie PhotoUploader.kt in der App:
+// Fotos, Topos und GPX-Dateien zu OneDrive hochladen, wie PhotoUploader.kt in der App:
 // Fotos in den Tour-Ordner (wird bei Bedarf angelegt), Topos/GPX in dessen Unterordner "Topos" bzw. "GPX".
+// Schneller: bis zu 3 Dateien gleichzeitig (wie im LifePhotoBook). Ausnahme: Hat die Tour noch keinen Ordner auf
+// OneDrive, geht zuerst eine Datei allein (sie legt den Ordner an), damit nicht zwei Ordner entstehen; ebenso
+// nur ein Topo bzw. ein GPX gleichzeitig pro Tour (Unterordner "Topos"/"GPX").
 // Die Dateien bleiben nur im Speicher: wird die Seite vorher geschlossen, müssen sie neu ausgewählt werden.
 
 import {
@@ -17,10 +20,12 @@ import { addFile, setFolder, setSetting } from './tourbook.js';
 
 export const KIND_FOLDER = { TOPO: 'Topos', GPX: 'GPX' };
 
-export function createUploader({ book, drive, onChange = () => {}, onFinished = () => {}, clock = () => Date.now() }) {
+export const PARALLEL_UPLOADS = 3;
+
+export function createUploader({ book, drive, onChange = () => {}, onFinished = () => {}, clock = () => Date.now(), parallel = PARALLEL_UPLOADS }) {
   const queue = []; // { tourId, file, kind }
+  const active = new Map(); // job → { tourId, name, progress }
   let running = false;
-  let current = null; // { tourId, name, progress }
   let uploaded = 0;
   const failed = []; // { tourId, name, reason, job }
   let stopReason = null;
@@ -29,7 +34,7 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
     for (const file of files) queue.push({ tourId, file, kind });
     stopReason = null;
     onChange();
-    if (!running) process();
+    pump();
   }
 
   function retryFailed() {
@@ -37,37 +42,56 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
     if (jobs.length) {
       queue.push(...jobs);
       stopReason = null;
-      if (!running) process();
+      pump();
     }
     onChange();
   }
 
-  async function process() {
-    running = true;
-    uploaded = 0;
-    try {
-      while (queue.length) {
-        const job = queue.shift();
-        current = { tourId: job.tourId, name: job.file.name, progress: 0 };
-        onChange();
-        try {
-          if (await uploadOne(job)) uploaded++;
-        } catch (e) {
-          console.error(e);
-          if (e instanceof AuthError || e instanceof BusyError) {
-            // Anmeldung abgelaufen oder kein Internet: alle restlichen warten auf "Nochmals versuchen"
-            stopReason = e instanceof AuthError ? 'Anmeldung abgelaufen.' : 'Keine Verbindung zu OneDrive.';
-            for (const j of [job, ...queue.splice(0)]) failed.push({ tourId: j.tourId, name: j.file.name, reason: stopReason, job: j });
-          } else {
-            failed.push({ tourId: job.tourId, name: job.file.name, reason: e.message || String(e), job });
-          }
-        }
+  /** Darf diese Datei jetzt starten? (Neuer Tour-Ordner bzw. Unterordner Topos/GPX: nur eine Datei aufs Mal) */
+  function mayStart(job) {
+    const same = [...active.keys()].filter((j) => j.tourId === job.tourId);
+    if (!same.length) return true;
+    const tour = book.current().tours.find((t) => t.id === job.tourId);
+    if (!tour?.oneDriveFolder?.value?.id) return false;
+    return !job.kind || !same.some((j) => j.kind === job.kind);
+  }
+
+  /** Startet so viele Dateien wie erlaubt; wenn keine mehr läuft, ist alles fertig. */
+  function pump() {
+    while (active.size < Math.max(1, parallel)) {
+      const i = queue.findIndex(mayStart);
+      if (i < 0) break;
+      const job = queue.splice(i, 1)[0];
+      if (!running) {
+        running = true;
+        uploaded = 0;
       }
-    } finally {
+      active.set(job, { tourId: job.tourId, name: job.file.name, progress: 0 });
+      run(job);
+    }
+    onChange();
+    if (running && active.size === 0) {
       running = false;
-      current = null;
       onChange();
       onFinished(uploaded);
+    }
+  }
+
+  async function run(job) {
+    try {
+      if (await uploadOne(job)) uploaded++;
+    } catch (e) {
+      console.error(e);
+      if (e instanceof AuthError || e instanceof BusyError) {
+        // Anmeldung abgelaufen oder kein Internet: alle restlichen warten auf "Nochmals versuchen"
+        stopReason = e instanceof AuthError ? 'Anmeldung abgelaufen.' : 'Keine Verbindung zu OneDrive.';
+        for (const j of [job, ...queue.splice(0)]) failed.push({ tourId: j.tourId, name: j.file.name, reason: stopReason, job: j });
+      } else {
+        failed.push({ tourId: job.tourId, name: job.file.name, reason: e.message || String(e), job });
+      }
+    } finally {
+      active.delete(job);
+      pump();
     }
   }
 
@@ -87,7 +111,8 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
   }
 
   /** true = hochgeladen, false = übersprungen (Tour inzwischen gelöscht) */
-  async function uploadOne({ tourId, file, kind }) {
+  async function uploadOne(job) {
+    const { tourId, file, kind } = job;
     const doc = book.current();
     const tour = doc.tours.find((t) => t.id === tourId && t.deleted == null);
     if (!tour) return false;
@@ -97,12 +122,14 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
     let name;
     if (kind) name = `${KIND_FOLDER[kind]}/${cleanFileName(file.name) ?? `${kind === 'TOPO' ? 'Topo' : 'GPX'}_${clock()}`}`;
     else {
-      const number = tour.photos.filter((p) => p.deleted == null).length + 1;
+      // Nummer: auch die Fotos zählen, die gerade gleichzeitig hochgeladen werden
+      const before = [...active.keys()].filter((j) => j !== job && j.tourId === tourId && !j.kind).length;
+      const number = tour.photos.filter((p) => p.deleted == null).length + before + 1;
       name = cleanFileName(file.name) ?? photoFileName(tour.mountain.value, tour.dates.value.start, number, file.type);
     }
 
     const progress = (p) => {
-      current = { ...current, progress: p };
+      if (active.has(job)) active.set(job, { ...active.get(job), progress: p });
       onChange();
     };
     let item;
@@ -146,7 +173,8 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
     isRunning: () => running,
     /** Stand für die Anzeige */
     status() {
-      return { running, current, waiting: queue.length, uploaded, failed: [...failed], stopReason };
+      const list = [...active.values()];
+      return { running, active: list, current: list[0] ?? null, waiting: queue.length, uploaded, failed: [...failed], stopReason };
     },
   };
 }
