@@ -57,8 +57,9 @@ export function renderTour(root, id, ctx) {
 
     <div class="section">
       <div class="sectionhead"><h2>${videoCount ? 'Fotos und Videos' : 'Fotos'}${photos.length ? ` <span class="muted">(${mediaCount(photos.length - videoCount, videoCount)})</span>` : ''}</h2>
-        <button class="btn outline small" data-add="PHOTO" ${offline ? 'disabled' : ''}>${icon('add', 18)} <span data-gallery-label>Fotos/Videos</span></button></div>
-      ${offline ? '' : `<button class="btn outline wide cameraRoll" data-camera-roll hidden>${icon('add', 18)} Fotos aus der OneDrive-App <span class="muted">(mit Ort)</span></button>`}
+      </div>
+      <button class="btn outline wide addMedia" data-add="PHOTO" ${offline ? 'disabled' : ''}>${icon('add', 18)} <span data-gallery-label>Fotos/Videos</span></button>
+      ${offline ? '' : `<button class="btn outline wide addMedia" data-camera-roll hidden>${icon('add', 18)} Aus OneDrive App</button>`}
       ${folder?.path && !offline ? `<button class="btn outline wide folderSync" data-folder-sync>${icon('sync', 18)} Mit OneDrive abgleichen</button>` : ''}
       ${stills.length ? `<button class="btn outline wide likeAll" data-like-all="${allLiked ? 'off' : 'on'}">${allLiked
         ? '♡ Bei allen Fotos das Herz entfernen'
