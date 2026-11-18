@@ -143,6 +143,111 @@ export function createOneDrive(getToken, fetchFn = (...a) => fetch(...a)) {
       }
     },
 
+    /**
+     * Ordner, in den die OneDrive-App am Handy die Fotos lädt ("Eigene Aufnahmen" / "Camera Roll"):
+     * { id, name, childCount } oder null, wenn es ihn nicht gibt.
+     */
+    async cameraRoll() {
+      try {
+        const v = await (await call(`${BASE}/me/drive/special/cameraroll?$select=id,name,folder`)).json();
+        return v.folder ? { id: v.id, name: v.name, childCount: v.folder.childCount ?? 0 } : null;
+      } catch (e) {
+        if (e.status === 404) return null;
+        throw e;
+      }
+    },
+
+    /**
+     * Eine Seite eines Ordners mit Vorschaubildern, neueste zuerst (für die Auswahl aus der OneDrive-App).
+     * Ergebnis: { items: [{ id, name, size, isFolder, childCount, mimeType, taken, modified, thumb, driveId }], next }
+     */
+    async listPage(folderId, nextUrl = null) {
+      const select = 'id,name,size,file,folder,photo,parentReference,lastModifiedDateTime,createdDateTime';
+      const first = `${BASE}/me/drive/items/${encodeURIComponent(folderId)}/children?$top=100&$expand=thumbnails($select=c400x400,large)&$select=${select}`;
+      let json;
+      if (nextUrl) json = await (await call(nextUrl)).json();
+      else {
+        try {
+          json = await (await call(`${first}&$orderby=lastModifiedDateTime%20desc`)).json();
+        } catch (e) {
+          if (e.status !== 400) throw e;
+          json = await (await call(first)).json(); // Sortieren nicht möglich: dann eben ohne
+        }
+      }
+      const items = (json.value ?? []).map((v) => {
+        const t = v.thumbnails?.[0];
+        return {
+          id: v.id,
+          name: v.name,
+          size: v.size ?? null,
+          isFolder: !!v.folder,
+          childCount: v.folder?.childCount ?? null,
+          mimeType: v.file?.mimeType ?? null,
+          taken: v.photo?.takenDateTime ?? null,
+          modified: v.lastModifiedDateTime ?? v.createdDateTime ?? null,
+          thumb: t?.c400x400?.url ?? t?.large?.url ?? null,
+          driveId: v.parentReference?.driveId ?? null,
+        };
+      });
+      return { items, next: json['@odata.nextLink'] ?? null };
+    },
+
+    /** Datei in einem Ordner über ihren Namen: { id, name, size, path, parentId } oder null. */
+    async itemInFolder(folderId, name) {
+      try {
+        const res = await call(`${BASE}/me/drive/items/${encodeURIComponent(folderId)}:/${encodePath(name)}?$select=id,name,size,parentReference`);
+        const v = await res.json();
+        return { ...uploadedItem(v), size: v.size ?? null };
+      } catch (e) {
+        if (e.status === 404) return null;
+        throw e;
+      }
+    },
+
+    /** Ordner über den Pfad holen, fehlende Ordner anlegen. Ergebnis: Kennung des Ordners. */
+    async ensureFolder(path) {
+      const existing = await this.itemIdByPath(path);
+      if (existing) return existing;
+      const cut = path.lastIndexOf('/');
+      const name = path.slice(cut + 1);
+      const parentUrl = cut < 0 ? `${BASE}/me/drive/root/children` : `${BASE}/me/drive/items/${encodeURIComponent(await this.ensureFolder(path.slice(0, cut)))}/children`;
+      try {
+        const res = await call(parentUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
+        });
+        return (await res.json()).id;
+      } catch (e) {
+        // Gleichzeitig von woanders angelegt: dann den nehmen
+        if (e instanceof ConflictError) {
+          const id = await this.itemIdByPath(path);
+          if (id) return id;
+        }
+        throw e;
+      }
+    },
+
+    /**
+     * Kopiert eine Datei auf OneDrive in einen Ordner. OneDrive kopiert selbst – nichts geht übers Handy,
+     * alle Angaben im Foto wie Ort und Aufnahmedatum bleiben. Gibt es den Namen dort schon: ConflictError.
+     * Wartet, bis die Kopie da ist. Ergebnis: { id, name, path, parentId, size }
+     */
+    async copyInto(sourceId, folderId, name, driveId = null, wait = (ms) => new Promise((r) => setTimeout(r, ms))) {
+      await call(`${BASE}/me/drive/items/${encodeURIComponent(sourceId)}/copy?@microsoft.graph.conflictBehavior=fail`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentReference: { ...(driveId ? { driveId } : {}), id: folderId }, name }),
+      });
+      // OneDrive kopiert im Hintergrund: warten, bis die Datei im Ordner erscheint (meist 1–3 Sekunden)
+      for (const ms of [700, 1000, 1500, 2000, 3000, 3000, 5000, 5000, 10000, 10000, 20000, 20000]) {
+        await wait(ms);
+        const item = await this.itemInFolder(folderId, name);
+        if (item) return item;
+      }
+      throw new OneDriveError('OneDrive kopiert noch – später in der Tour «Mit OneDrive abgleichen» tippen.', 0);
+    },
+
     /** Wie listChildren, aber über den Pfad (z. B. "Pictures/Tourenbuch"); null, wenn es den Ordner nicht gibt. */
     listChildrenByPath(path) {
       return this.listChildren(null, `${BASE}/me/drive/root:/${encodePath(path)}:/children?$top=999&$select=id,name,size,folder,file,photo`);

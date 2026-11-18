@@ -28,11 +28,12 @@ const uploader = createUploader({
   book,
   drive,
   onChange: () => renderUploadOnly(),
-  onFinished: (count) => {
-    if (count) {
-      showToast(count === 1 ? '1 Datei hochgeladen' : `${count} Dateien hochgeladen`);
-      syncNow();
-    }
+  onFinished: (count, { existing = 0 } = {}) => {
+    const parts = [];
+    if (count) parts.push(count === 1 ? '1 Datei hochgeladen' : `${count} Dateien hochgeladen`);
+    if (existing) parts.push(existing === 1 ? '1 war schon in der Tour' : `${existing} waren schon in der Tour`);
+    if (parts.length) showToast(parts.join(' · '));
+    if (count || existing) syncNow();
   },
 });
 

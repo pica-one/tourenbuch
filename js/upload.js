@@ -4,6 +4,10 @@
 // OneDrive, geht zuerst eine Datei allein (sie legt den Ordner an), damit nicht zwei Ordner entstehen; ebenso
 // nur ein Topo bzw. ein GPX gleichzeitig pro Tour (Unterordner "Topos"/"GPX").
 // Die Dateien bleiben nur im Speicher: wird die Seite vorher geschlossen, müssen sie neu ausgewählt werden.
+// Zusätzlich: Fotos, die schon auf OneDrive liegen (aus der OneDrive-App am Handy, Ordner "Eigene Aufnahmen"),
+// werden auf OneDrive in den Tour-Ordner KOPIERT (addCopies). So bleibt der Aufnahmeort, den Android beim
+// Hochladen aus dem Browser entfernt. Das Original bleibt, wo es ist. Gleicher Name + gleiche Grösse schon im
+// Tour-Ordner → nicht nochmals kopiert ("schon vorhanden"); gleicher Name, andere Grösse → "Name 1.jpg".
 
 import {
   cleanFileName,
@@ -23,15 +27,24 @@ export const KIND_FOLDER = { TOPO: 'Topos', GPX: 'GPX' };
 export const PARALLEL_UPLOADS = 3;
 
 export function createUploader({ book, drive, onChange = () => {}, onFinished = () => {}, clock = () => Date.now(), parallel = PARALLEL_UPLOADS }) {
-  const queue = []; // { tourId, file, kind }
+  const queue = []; // { tourId, file, kind } oder { tourId, source, kind: null } (Kopie auf OneDrive)
   const active = new Map(); // job → { tourId, name, progress }
   let running = false;
   let uploaded = 0;
+  let existing = 0; // Kopien, die schon im Tour-Ordner waren
   const failed = []; // { tourId, name, reason, job }
   let stopReason = null;
 
   function add(tourId, files, kind = null) {
     for (const file of files) queue.push({ tourId, file, kind });
+    stopReason = null;
+    onChange();
+    pump();
+  }
+
+  /** Fotos von OneDrive (source: { id, name, size, mimeType, driveId }) in den Tour-Ordner kopieren. */
+  function addCopies(tourId, sources) {
+    for (const source of sources) queue.push({ tourId, source, kind: null });
     stopReason = null;
     onChange();
     pump();
@@ -65,29 +78,32 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
       if (!running) {
         running = true;
         uploaded = 0;
+        existing = 0;
       }
-      active.set(job, { tourId: job.tourId, name: job.file.name, progress: 0 });
+      active.set(job, { tourId: job.tourId, name: jobName(job), progress: 0, copy: !!job.source });
       run(job);
     }
     onChange();
     if (running && active.size === 0) {
       running = false;
       onChange();
-      onFinished(uploaded);
+      onFinished(uploaded, { existing });
     }
   }
 
   async function run(job) {
     try {
-      if (await uploadOne(job)) uploaded++;
+      const result = await uploadOne(job);
+      if (result === 'exists') existing++;
+      else if (result) uploaded++;
     } catch (e) {
       console.error(e);
       if (e instanceof AuthError || e instanceof BusyError) {
         // Anmeldung abgelaufen oder kein Internet: alle restlichen warten auf "Nochmals versuchen"
         stopReason = e instanceof AuthError ? 'Anmeldung abgelaufen.' : 'Keine Verbindung zu OneDrive.';
-        for (const j of [job, ...queue.splice(0)]) failed.push({ tourId: j.tourId, name: j.file.name, reason: stopReason, job: j });
+        for (const j of [job, ...queue.splice(0)]) failed.push({ tourId: j.tourId, name: jobName(j), reason: stopReason, job: j });
       } else {
-        failed.push({ tourId: job.tourId, name: job.file.name, reason: e.message || String(e), job });
+        failed.push({ tourId: job.tourId, name: jobName(job), reason: e.message || String(e), job });
       }
     } finally {
       active.delete(job);
@@ -110,9 +126,10 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
     return `${dir ?? `${base}/${mountainFolderName(mountain)}`}/${tourFolderName(tour.dates.value.start, tour.routeName?.value)}`;
   }
 
-  /** true = hochgeladen, false = übersprungen (Tour inzwischen gelöscht) */
+  /** true = hochgeladen/kopiert, 'exists' = Kopie war schon da, false = übersprungen (Tour inzwischen gelöscht) */
   async function uploadOne(job) {
-    const { tourId, file, kind } = job;
+    const { tourId, kind, source } = job;
+    const file = job.file ?? { name: source.name, type: source.mimeType ?? '' };
     const doc = book.current();
     const tour = doc.tours.find((t) => t.id === tourId && t.deleted == null);
     if (!tour) return false;
@@ -133,7 +150,9 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
       onChange();
     };
     let item;
-    if (folder?.id) {
+    let already = false;
+    if (source) ({ item, already } = await copyOne(source, name, folder, folderPath));
+    else if (folder?.id) {
       try {
         item = await drive.upload({ folderId: folder.id, name }, file, progress);
       } catch (e) {
@@ -142,6 +161,7 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
       }
     }
     if (!item) item = await drive.upload({ path: `${folderPath}/${name}` }, file, progress);
+    if (source) progress(1);
 
     const now = clock();
     await book.update((d) => {
@@ -160,11 +180,32 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
       if (!next.settings.groupFolders) next = setSetting(next, 'groupFolders', storage.groupFolders, now);
       return next;
     });
-    return true;
+    return already ? 'exists' : true;
+  }
+
+  /** Kopie auf OneDrive in den Tour-Ordner (legt ihn bei Bedarf an). Ergebnis: { item, already } */
+  async function copyOne(source, name, folder, folderPath) {
+    let folderId = folder?.id ?? (await drive.ensureFolder(folderPath));
+    for (let attempt = 0; ; attempt++) {
+      try {
+        for (let n = 0; n < 50; n++) {
+          const candidate = numberedName(name, n);
+          const there = await drive.itemInFolder(folderId, candidate);
+          if (!there) return { item: await drive.copyInto(source.id, folderId, candidate, source.driveId ?? null), already: false };
+          if (source.size != null && there.size === source.size) return { item: there, already: true };
+        }
+        throw new Error('Zu viele Dateien mit diesem Namen.');
+      } catch (e) {
+        // Ordner der Tour gibt es nicht mehr: über den Pfad neu anlegen (einmal)
+        if (e.status !== 404 || attempt > 0 || !folder?.id) throw e;
+        folderId = await drive.ensureFolder(folderPath);
+      }
+    }
   }
 
   return {
     add,
+    addCopies,
     retryFailed,
     clearFailed() {
       failed.splice(0);
@@ -174,9 +215,20 @@ export function createUploader({ book, drive, onChange = () => {}, onFinished = 
     /** Stand für die Anzeige */
     status() {
       const list = [...active.values()];
-      return { running, active: list, current: list[0] ?? null, waiting: queue.length, uploaded, failed: [...failed], stopReason };
+      return { running, active: list, current: list[0] ?? null, waiting: queue.length, uploaded, existing, failed: [...failed], stopReason };
     },
   };
+}
+
+function jobName(job) {
+  return job.file?.name ?? job.source?.name ?? '';
+}
+
+/** "IMG_1.jpg", 2 → "IMG_1 2.jpg" (wie OneDrive bei gleichen Namen) */
+export function numberedName(name, n) {
+  if (!n) return name;
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? `${name.slice(0, dot)} ${n}${name.slice(dot)}` : `${name} ${n}`;
 }
 
 function parentOf(path) {

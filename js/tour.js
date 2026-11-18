@@ -1,5 +1,6 @@
 // Bildschirm einer Tour: Angaben, Details, Fotos (Raster + Betrachter), Topo, GPX – Reihenfolge wie in der App.
 
+import { cameraRollInfo, openCameraRoll } from './cameraroll.js';
 import { icon, typeBadge, typeLabel } from './icons.js';
 import { isLiked, isMediaItem, isVideoName, reconcileFolder, reconcileText, removeFile, setLiked, setLikedAll } from './tourbook.js';
 import { dateRange, dayCount, esc, mediaCount, showToast, stars, topbar } from './ui.js';
@@ -56,7 +57,8 @@ export function renderTour(root, id, ctx) {
 
     <div class="section">
       <div class="sectionhead"><h2>${videoCount ? 'Fotos und Videos' : 'Fotos'}${photos.length ? ` <span class="muted">(${mediaCount(photos.length - videoCount, videoCount)})</span>` : ''}</h2>
-        <button class="btn outline small" data-add="PHOTO" ${offline ? 'disabled' : ''}>${icon('add', 18)} Fotos/Videos</button></div>
+        <button class="btn outline small" data-add="PHOTO" ${offline ? 'disabled' : ''}>${icon('add', 18)} <span data-gallery-label>Fotos/Videos</span></button></div>
+      ${offline ? '' : `<button class="btn outline wide cameraRoll" data-camera-roll hidden>${icon('add', 18)} Fotos aus der OneDrive-App <span class="muted">(mit Ort)</span></button>`}
       ${folder?.path && !offline ? `<button class="btn outline wide folderSync" data-folder-sync>${icon('sync', 18)} Mit OneDrive abgleichen</button>` : ''}
       ${stills.length ? `<button class="btn outline wide likeAll" data-like-all="${allLiked ? 'off' : 'on'}">${allLiked
         ? '♡ Bei allen Fotos das Herz entfernen'
@@ -83,6 +85,23 @@ export function renderTour(root, id, ctx) {
     b.onclick = () => pickFiles(b.dataset.add, t.id, ctx.uploader);
   });
   updateUploadStatus(root, t.id, ctx.uploader);
+
+  // Fotos aus der OneDrive-App (nur wenn es deren Ordner gibt): auf OneDrive in die Tour kopieren
+  const rollButton = root.querySelector('[data-camera-roll]');
+  if (rollButton) {
+    cameraRollInfo(ctx.drive)
+      .then((roll) => {
+        if (!roll || !rollButton.isConnected) return;
+        rollButton.hidden = false;
+        const label = root.querySelector('[data-gallery-label]');
+        if (label) label.textContent = 'Aus Galerie';
+      })
+      .catch((e) => console.warn('OneDrive-App-Ordner', e));
+    rollButton.onclick = () => {
+      const tour = ctx.book.current().tours.find((x) => x.id === t.id && x.deleted == null);
+      if (tour) openCameraRoll({ drive: ctx.drive, tour, onCopy: (sources) => ctx.uploader.addCopies(t.id, sources) });
+    };
+  }
   root.querySelector('[data-folder-sync]')?.addEventListener('click', (e) => syncFolder(ctx, t.id, e.currentTarget));
 
   // Topo/GPX: herunterladen, entfernen
@@ -230,7 +249,8 @@ function uploadStatus(tourId, uploader) {
     const pct = Math.round((mine.reduce((n, a) => n + (a.progress ?? 0), 0) / mine.length) * 100);
     const names = mine.length === 1 ? esc(mine[0].name) : `${mine.length} Dateien gleichzeitig`;
     const done = s.uploaded ? ` · ${s.uploaded} fertig` : '';
-    html += `<div class="upload"><div class="uploadtext">Lade hoch: ${names} (${pct} %)${s.waiting ? ` · noch ${s.waiting} wartend` : ''}${done}</div>
+    const verb = mine.every((a) => a.copy) ? 'Kopiere' : 'Lade hoch';
+    html += `<div class="upload"><div class="uploadtext">${verb}: ${names} (${pct} %)${s.waiting ? ` · noch ${s.waiting} wartend` : ''}${done}</div>
       <div class="bar"><span style="width:${pct}%"></span></div></div>`;
   }
   if (failed.length) {
