@@ -310,8 +310,9 @@ select { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); 
 }
 
 /* Auswahl "Fotos aus der OneDrive-App" */
-.btn.addMedia { min-height: 40px; margin-bottom: 8px; gap: 6px; }
-.btn.addMedia[hidden] { display: none; }
+.mediaBtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.btn.mediaBtn { min-height: 30px; padding: 0 8px; border-radius: 15px; font-size: 0.8rem; gap: 4px; white-space: nowrap; overflow: hidden; }
+.btn.mediaBtn[hidden] { display: none; }
 body.noscroll { overflow: hidden; }
 .picker { position: fixed; inset: 0; z-index: 30; background: var(--bg); color: var(--text); display: flex; flex-direction: column; }
 .picker-bar { display: flex; align-items: center; gap: 4px; padding: env(safe-area-inset-top) 4px 0; min-height: 56px; border-bottom: 1px solid var(--border); }

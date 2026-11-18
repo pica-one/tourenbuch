@@ -245,7 +245,7 @@ export function createOneDrive(getToken, fetchFn = (...a) => fetch(...a)) {
         const item = await this.itemInFolder(folderId, name);
         if (item) return item;
       }
-      throw new OneDriveError('OneDrive kopiert noch – später in der Tour «Mit OneDrive abgleichen» tippen.', 0);
+      throw new OneDriveError('OneDrive kopiert noch – später in der Tour «Abgleichen» tippen.', 0);
     },
 
     /** Wie listChildren, aber über den Pfad (z. B. "Pictures/Tourenbuch"); null, wenn es den Ordner nicht gibt. */
