@@ -6,10 +6,11 @@ export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-export function topbar(title, { back = false, actions = '' } = {}) {
+/** left: Titel links ohne Platzhalter (Startseite – sonst wird der Titel am Handy neben den Knöpfen abgeschnitten) */
+export function topbar(title, { back = false, actions = '', left = false } = {}) {
   return `<header class="topbar">
-    ${back ? `<button class="iconbtn" data-action="back" aria-label="Zurück">${icon('back')}</button>` : '<span style="width:44px"></span>'}
-    <h1>${esc(title)}</h1>
+    ${back ? `<button class="iconbtn" data-action="back" aria-label="Zurück">${icon('back')}</button>` : left ? '' : '<span style="width:44px"></span>'}
+    <h1${left ? ' class="left"' : ''}>${esc(title)}</h1>
     ${actions || '<span style="width:44px"></span>'}
   </header>`;
 }
