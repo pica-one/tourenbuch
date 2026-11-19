@@ -16,7 +16,7 @@ import { allPartnerNames, createTourBook, deleteTour, favorites, isVideoName, se
 import { dateRange, dateTime, esc, mediaCount, showToast, stars, topbar } from './ui.js';
 import { createUploader } from './upload.js';
 
-const APP_VERSION = 'Web 0.1';
+const APP_VERSION = 'Web V1.12'; // bei jeder Veröffentlichung anpassen (= Ordner Web_V1_x)
 const SYNC_THROTTLE_MS = 2 * 60 * 1000;
 const DEMO_KEY = 'tourenbuch-demo'; // nur zum Testen ohne Anmeldung
 
